@@ -5,6 +5,7 @@ import type { Json } from '@/lib/supabase/database.types'
 type WorkflowResult = {
   requestId?: string
   status?: string
+  message?: string
   draft?: Record<string, unknown>
 }
 
@@ -14,7 +15,16 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { data, error } = await supabase.from('content_items').select('*').order('created_at', { ascending: false }).limit(100)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ data })
+  const contentIds = data.map((item) => item.id)
+  const { data: versions, error: versionsError } = contentIds.length
+    ? await supabase.from('content_versions').select('*').in('content_id', contentIds).order('version_number', { ascending: false })
+    : { data: [], error: null }
+  if (versionsError) return NextResponse.json({ error: versionsError.message }, { status: 500 })
+  const latestVersions = new Map<string, (typeof versions)[number]>()
+  versions.forEach((version) => {
+    if (!latestVersions.has(version.content_id)) latestVersions.set(version.content_id, version)
+  })
+  return NextResponse.json({ data: data.map((item) => ({ ...item, latest_version: latestVersions.get(item.id) ?? null })) })
 }
 
 export async function POST(request: Request) {
@@ -97,4 +107,37 @@ export async function POST(request: Request) {
       data: { ...data, status: 'failed' },
     }, { status: 502 })
   }
+}
+
+export async function PATCH(request: Request) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const body = await request.json().catch(() => null) as { id?: unknown; action?: unknown; comment?: unknown } | null
+  const id = typeof body?.id === 'string' ? body.id : ''
+  const action = body?.action === 'approve' || body?.action === 'request_revision' ? body.action : null
+  const comment = typeof body?.comment === 'string' ? body.comment.trim().slice(0, 5000) : ''
+  if (!id || !action) return NextResponse.json({ error: 'Invalid review action' }, { status: 400 })
+  if (action === 'request_revision' && !comment) return NextResponse.json({ error: 'A revision note is required' }, { status: 400 })
+
+  const { data: version, error: versionError } = await supabase.from('content_versions')
+    .select('id').eq('content_id', id).order('version_number', { ascending: false }).limit(1).maybeSingle()
+  if (versionError) return NextResponse.json({ error: versionError.message }, { status: 500 })
+  if (!version) return NextResponse.json({ error: 'No draft is available for review' }, { status: 409 })
+
+  const decision = action === 'approve' ? 'approve' : 'request_revision'
+  const { error: reviewError } = await supabase.from('content_reviews').insert({
+    content_id: id,
+    version_id: version.id,
+    reviewer_id: user.id,
+    decision,
+    comment: comment || null,
+  })
+  if (reviewError) return NextResponse.json({ error: reviewError.message }, { status: 403 })
+
+  const nextStatus = action === 'approve' ? 'approved' : 'revision_requested'
+  const { data, error } = await supabase.from('content_items').update({ status: nextStatus }).eq('id', id).select().single()
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ data, message: action === 'approve' ? 'Content approved successfully.' : 'Revision requested successfully.' })
 }

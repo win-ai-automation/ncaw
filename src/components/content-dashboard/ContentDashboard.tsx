@@ -10,6 +10,7 @@ import {
   Check,
   ChevronDown,
   CircleAlert,
+  Copy,
   Clock3,
   ExternalLink,
   FileText,
@@ -53,6 +54,26 @@ type SearchResult = {
   status: string
   source_url: string | null
   created_at: string
+}
+
+type QueueContent = {
+  id: string
+  title: string
+  source_url: string | null
+  platform: string
+  raw_content: string | null
+  submitter_notes: string | null
+  status: string
+  risk_level: string
+  risk_flags: unknown
+  created_at: string
+  latest_version: null | {
+    id: string
+    version_number: number
+    editor_content: string | null
+    generated_payload: unknown
+    created_at: string
+  }
 }
 
 const seedItems: Item[] = [
@@ -307,7 +328,7 @@ function App({ section = 'overview', identity }: { section?: DashboardSection; i
           </div>
         </header>
 
-        {section === 'content' ? <ContentIntakePanel /> : <DashboardPageSkeleton />}
+        {section === 'content' ? <ContentIntakePanel /> : section === 'queue' ? <ReviewQueuePanel /> : <DashboardPageSkeleton />}
 
         {false && <>
         <section className="page-head">
@@ -420,46 +441,246 @@ function ContentIntakePanel() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [progress, setProgress] = useState(0)
+  const [progressMessage, setProgressMessage] = useState('')
+  const [progressState, setProgressState] = useState<'processing' | 'success' | 'error'>('processing')
+  const [showProgress, setShowProgress] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState<{ title?: string; source?: string }>({})
+  const [fieldTouched, setFieldTouched] = useState<{ title?: boolean; source?: boolean }>({})
+
+  function validateTitle(value = title) {
+    const message = value.trim() ? undefined : 'Enter a title for this content.'
+    setFieldErrors((current) => ({ ...current, title: message }))
+    return !message
+  }
+
+  function validateSource(nextUrl = url, nextContent = content) {
+    const message = nextUrl.trim() || nextContent.trim() ? undefined : 'Add a source URL or paste the source content.'
+    setFieldErrors((current) => ({ ...current, source: message }))
+    return !message
+  }
+
+  useEffect(() => {
+    if (!showProgress) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = previousOverflow }
+  }, [showProgress])
+
+  useEffect(() => {
+    if (!submitting) return
+    const stages = [
+      { progress: 24, message: 'Sending content to n8n...' },
+      { progress: 46, message: 'Validating and preparing the source...' },
+      { progress: 68, message: 'Generating the AI draft...' },
+      { progress: 86, message: 'Preparing the review package...' },
+      { progress: 94, message: 'Waiting for n8n to finish...' },
+    ]
+    let index = 0
+    const timer = window.setInterval(() => {
+      if (index < stages.length) {
+        setProgress(stages[index].progress)
+        setProgressMessage(stages[index].message)
+        index += 1
+      }
+    }, 1400)
+    return () => window.clearInterval(timer)
+  }, [submitting])
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError('')
     setSuccess('')
-    if (!title.trim()) return setError('Enter a title for this content.')
-    if (!url.trim() && !content.trim()) return setError('Add a source URL or paste the source content.')
+    setFieldTouched({ title: true, source: true })
+    const titleValid = validateTitle()
+    const sourceValid = validateSource()
+    if (!titleValid || !sourceValid) return
     setSubmitting(true)
+    setShowProgress(true)
+    setProgressState('processing')
+    setProgress(8)
+    setProgressMessage('Starting the n8n workflow...')
     try {
       const response = await fetch('/api/content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, url, content, notes }),
       })
-      const payload = await response.json() as { data?: { id: string }; error?: string; warning?: string }
+      const payload = await response.json() as { data?: { id: string }; error?: string; warning?: string; workflow?: { message?: string; status?: string } }
       if (!response.ok) throw new Error(payload.error || 'Unable to submit content.')
       setTitle('')
       setUrl('')
       setContent('')
       setNotes('')
-      setSuccess(payload.warning || `Draft created and sent to review. Reference: ${payload.data?.id ?? ''}`)
+      setFieldErrors({})
+      setFieldTouched({})
+      const message = payload.warning || payload.workflow?.message || `Draft created and sent to review. Reference: ${payload.data?.id ?? ''}`
+      setSuccess(message)
+      setProgress(100)
+      setProgressState('success')
+      setProgressMessage(message)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to submit content.')
+      const message = caught instanceof Error ? caught.message : 'Unable to submit content.'
+      setError(message)
+      setProgress(100)
+      setProgressState('error')
+      setProgressMessage(message)
     } finally {
       setSubmitting(false)
+      window.setTimeout(() => setShowProgress(false), 2500)
     }
   }
 
   return <section className="content-intake-page">
-    <header><div><span>CONTENT INTAKE</span><h1>Submit content</h1><p>Add a source for the content automation workflow.</p></div></header>
+    <header><div><h1>Submit content</h1><p>Add a source for the content automation workflow.</p></div></header>
     <form className="content-intake-card" onSubmit={submit} noValidate>
       {error && <div className="content-form-message error"><CircleAlert />{error}</div>}
       {success && <div className="content-form-message success"><Check />{success}</div>}
-      <label>Title <em>*</em><input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} placeholder="Enter a clear working title" /></label>
-      <label>Source URL <small>Use a public URL when available</small><div className="content-url-input"><Link2 /><input type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/content" /></div></label>
+      <label><span className="content-field-heading">Title <em>*</em></span><input className={fieldErrors.title ? 'has-error' : ''} value={title} onChange={(event) => { setTitle(event.target.value); if (fieldTouched.title) validateTitle(event.target.value) }} onBlur={(event) => { setFieldTouched((current) => ({ ...current, title: true })); validateTitle(event.target.value) }} aria-invalid={Boolean(fieldErrors.title)} aria-describedby="content-title-error" maxLength={240} placeholder="Enter a clear working title" />{fieldErrors.title && <span className="content-field-error" id="content-title-error">{fieldErrors.title}</span>}</label>
+      <label>Source URL <small>Use a public URL when available</small><div className={`content-url-input ${fieldErrors.source ? 'has-error' : ''}`}><Link2 /><input type="url" value={url} onChange={(event) => { setUrl(event.target.value); if (fieldTouched.source) validateSource(event.target.value, content) }} onBlur={(event) => { setFieldTouched((current) => ({ ...current, source: true })); validateSource(event.target.value, content) }} aria-invalid={Boolean(fieldErrors.source)} aria-describedby="content-source-error" placeholder="https://example.com/content" /></div></label>
       <div className="content-form-divider"><span>or paste the source</span></div>
-      <label>Source content <small>Up to 100,000 characters</small><textarea value={content} onChange={(event) => setContent(event.target.value)} maxLength={100000} placeholder="Paste the original article, transcript, or post here..." /></label>
+      <label>Source content <small>Up to 100,000 characters</small><textarea className={fieldErrors.source ? 'has-error' : ''} value={content} onChange={(event) => { setContent(event.target.value); if (fieldTouched.source) validateSource(url, event.target.value) }} onBlur={(event) => { setFieldTouched((current) => ({ ...current, source: true })); validateSource(url, event.target.value) }} aria-invalid={Boolean(fieldErrors.source)} aria-describedby="content-source-error" maxLength={100000} placeholder="Paste the original article, transcript, or post here..." />{fieldErrors.source && <span className="content-field-error" id="content-source-error">{fieldErrors.source}</span>}</label>
       <label>Instructions for AI <small>Optional</small><textarea className="content-notes" value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="Audience, tone, output requirements, or context..." /></label>
       <footer><p><ShieldCheck />Human review is required before publication.</p><button className="primary-btn" disabled={submitting}>{submitting ? 'Submitting...' : 'Submit content'}</button></footer>
     </form>
+    {showProgress && <div className="workflow-progress-backdrop" role="presentation">
+      <section className={`workflow-progress-modal ${progressState}`} role="alertdialog" aria-modal="true" aria-labelledby="workflow-progress-title" aria-describedby="workflow-progress-message">
+        <div className="workflow-progress-icon">{progressState === 'success' ? <Check /> : progressState === 'error' ? <CircleAlert /> : <Sparkles />}</div>
+        <h2 id="workflow-progress-title">{progressState === 'processing' ? 'Processing content' : progressState === 'success' ? 'Workflow completed' : 'Workflow failed'}</h2>
+        <p id="workflow-progress-message">{progressMessage}</p>
+        <div className="workflow-progress-track" aria-label={`Workflow progress ${progress}%`}><span style={{ width: `${progress}%` }} /></div>
+        <strong>{progress}%</strong>
+      </section>
+    </div>}
+  </section>
+}
+
+function ReviewQueuePanel() {
+  const [items, setItems] = useState<QueueContent[]>([])
+  const [selectedId, setSelectedId] = useState('')
+  const [query, setQuery] = useState('')
+  const [status, setStatus] = useState('all')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [revisionOpen, setRevisionOpen] = useState(false)
+  const [revisionNote, setRevisionNote] = useState('')
+  const [actionPending, setActionPending] = useState(false)
+  const [actionMessage, setActionMessage] = useState('')
+
+  async function reviewItem(action: 'approve' | 'request_revision') {
+    const item = items.find((entry) => entry.id === selectedId)
+    if (!item || actionPending) return
+    setActionPending(true)
+    setActionMessage('')
+    try {
+      const response = await fetch('/api/content', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: item.id, action, comment: revisionNote }),
+      })
+      const payload = await response.json() as { data?: QueueContent; error?: string; message?: string }
+      if (!response.ok) throw new Error(payload.error || 'Unable to update this content.')
+      const nextStatus = action === 'approve' ? 'approved' : 'revision_requested'
+      setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, status: nextStatus } : entry))
+      setActionMessage(payload.message || (action === 'approve' ? 'Content approved successfully.' : 'Revision requested successfully.'))
+      setRevisionOpen(false)
+      setRevisionNote('')
+    } catch (caught) {
+      setActionMessage(caught instanceof Error ? caught.message : 'Unable to update this content.')
+    } finally {
+      setActionPending(false)
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController()
+    async function loadQueue() {
+      try {
+        const response = await fetch('/api/content', { signal: controller.signal })
+        const payload = await response.json() as { data?: QueueContent[]; error?: string }
+        if (!response.ok) throw new Error(payload.error || 'Unable to load the review queue.')
+        const next = payload.data ?? []
+        setItems(next)
+        setSelectedId((current) => current || next[0]?.id || '')
+      } catch (caught) {
+        if ((caught as Error).name !== 'AbortError') setError(caught instanceof Error ? caught.message : 'Unable to load the review queue.')
+      } finally {
+        if (!controller.signal.aborted) setLoading(false)
+      }
+    }
+    loadQueue()
+    return () => controller.abort()
+  }, [])
+
+  if (loading) return <DashboardPageSkeleton />
+
+  const filteredItems = items.filter((item) => {
+    const matchesQuery = item.title.toLowerCase().includes(query.toLowerCase())
+    const matchesStatus = status === 'all' || item.status === status
+    return matchesQuery && matchesStatus
+  })
+  const active = items.find((item) => item.id === selectedId) ?? filteredItems[0]
+  const flags = Array.isArray(active?.risk_flags) ? active.risk_flags.filter((flag): flag is string => typeof flag === 'string') : []
+  const draft = active?.latest_version?.editor_content || ''
+
+  return <section className="live-queue-page">
+    <header className="live-queue-heading">
+      <div><h1>Review queue</h1><p>Review AI-generated drafts before they are approved for publication.</p></div>
+      <div className="live-queue-total"><strong>{items.filter((item) => item.status === 'pending_review').length}</strong><span>Pending review</span></div>
+    </header>
+    {error ? <div className="queue-state-card error"><CircleAlert /><strong>Unable to load queue</strong><p>{error}</p></div> : items.length === 0 ? <div className="queue-state-card"><Inbox /><strong>No content to review</strong><p>New drafts will appear here after the automation workflow finishes.</p></div> : <div className="live-queue-workspace">
+      <aside className="live-queue-list">
+        <div className="live-queue-tools">
+          <label><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search content..." /></label>
+          <select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="Filter by status">
+            <option value="all">All statuses</option>
+            <option value="pending_review">Pending review</option>
+            <option value="processing">Processing</option>
+            <option value="failed">Failed</option>
+            <option value="approved">Approved</option>
+            <option value="revision_requested">Needs revision</option>
+          </select>
+        </div>
+        <div className="live-queue-items">
+          {filteredItems.length === 0 ? <div className="queue-list-empty">No matching content</div> : filteredItems.map((item) => <button className={item.id === active?.id ? 'active' : ''} key={item.id} onClick={() => setSelectedId(item.id)}>
+            <div><span className={`queue-status status-${item.status}`}>{statusLabel(item.status)}</span><time>{new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</time></div>
+            <strong>{item.title}</strong>
+            <p><Link2 />{item.platform}{item.source_url ? ` · ${new URL(item.source_url).hostname}` : ' · Pasted content'}</p>
+            <footer><span className={`queue-risk risk-${item.risk_level}`}>{item.risk_level} risk</span>{item.latest_version && <small>Version {item.latest_version.version_number}</small>}</footer>
+          </button>)}
+        </div>
+      </aside>
+      {active && <article className="live-review-detail">
+        <header>
+          <div><span className={`queue-status status-${active.status}`}>{statusLabel(active.status)}</span><h2>{active.title}</h2><p><Link2 />{active.source_url || 'Source content submitted directly'}</p></div>
+          <div className="review-more-wrap">
+            <button className="icon-btn" aria-label="More options" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><MoreHorizontal /></button>
+            {menuOpen && <div className="review-more-menu">
+              <button onClick={async () => { await navigator.clipboard.writeText(active.id); setActionMessage('Content ID copied.'); setMenuOpen(false) }}><Copy />Copy content ID</button>
+              {active.source_url && <a href={active.source_url} target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><ExternalLink />Open source URL</a>}
+              <button onClick={() => { setMenuOpen(false); window.location.reload() }}><History />Refresh content</button>
+            </div>}
+          </div>
+        </header>
+        {actionMessage && <div className="review-action-message"><Check />{actionMessage}</div>}
+        {flags.length > 0 && <div className="live-risk-banner"><CircleAlert /><div><strong>{flags.length} items require verification</strong><p>{flags[0]}</p></div></div>}
+        <div className="live-review-columns">
+          <section><header><strong>ORIGINAL CONTENT</strong><span>{active.raw_content?.length ?? 0} characters</span></header><div className="review-copy">{active.raw_content || 'The original content will be extracted from the source URL.'}</div></section>
+          <section><header><strong><Sparkles />NETFINTAX DRAFT</strong><span>{active.latest_version ? `Version ${active.latest_version.version_number}` : 'Not ready'}</span></header><div className={`review-copy ${!draft ? 'empty' : ''}`}>{draft || (active.status === 'processing' || active.status === 'received' ? 'The AI draft is still being generated.' : 'No generated draft is available.')}</div></section>
+        </div>
+        <footer className="live-review-actions"><button className="request-revision-btn" disabled={!active.latest_version || actionPending} onClick={() => { setRevisionOpen(true); setActionMessage('') }}><MessageSquareText />Request revision</button><button className="approve-review-btn" disabled={!active.latest_version || actionPending || active.status === 'approved'} onClick={() => reviewItem('approve')}><Check />{actionPending ? 'Saving...' : active.status === 'approved' ? 'Approved' : 'Approve content'}</button></footer>
+      </article>}
+    </div>}
+    {revisionOpen && <div className="modal-wrap">
+      <form className="modal revision-modal" onSubmit={(event) => { event.preventDefault(); reviewItem('request_revision') }}>
+        <div className="modal-icon"><MessageSquareText /></div>
+        <h2>Request revision</h2>
+        <p className="modal-copy">Describe what must be changed before this content can be approved.</p>
+        <label>Revision note <span>*</span><textarea autoFocus required maxLength={5000} value={revisionNote} onChange={(event) => setRevisionNote(event.target.value)} placeholder="Explain the required changes..." /></label>
+        <div className="modal-actions"><button type="button" className="secondary-btn" disabled={actionPending} onClick={() => setRevisionOpen(false)}>Cancel</button><button className="primary-btn" disabled={actionPending || !revisionNote.trim()}>{actionPending ? 'Saving...' : 'Send revision request'}</button></div>
+      </form>
+    </div>}
   </section>
 }
 
