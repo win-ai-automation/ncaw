@@ -1,0 +1,88 @@
+{
+  "name": "Netfintax 02 - Publish Approved Content",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "content-publish",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "03cc3279-30d1-48dc-89d9-fc442077a96f",
+      "name": "Receive Approved Content",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-540, 0],
+      "webhookId": "netfintax-content-publish"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json.body ?? $json;\nconst contentId = String(input.contentId ?? '').trim();\nconst locationId = String(input.locationId ?? '').trim();\nconst userId = String(input.userId ?? '').trim();\nconst accountIds = Array.isArray(input.accountIds) ? input.accountIds.map(String).map(v => v.trim()).filter(Boolean) : [];\nconst draft = String(input.draft ?? '').trim();\nif (!contentId) throw new Error('contentId is required');\nif (!locationId) throw new Error('locationId is required');\nif (!userId) throw new Error('userId is required');\nif (!accountIds.length) throw new Error('At least one GHL account ID is required');\nif (!draft) throw new Error('Approved draft is required');\nreturn [{ json: { contentId, locationId, userId, accountIds, summary: draft, type: 'post', status: 'published', approvedAt: new Date().toISOString() } }];"
+      },
+      "id": "a739cc6b-a19f-48e2-851e-08f30e14fb50",
+      "name": "Validate Publish Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, 0]
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "method": "POST",
+        "url": "={{ 'https://services.leadconnectorhq.com/social-media-posting/' + $json.locationId + '/posts' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Version", "value": "v3" },
+            { "name": "Accept", "value": "application/json" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ accountIds: $json.accountIds, summary: $json.summary, status: $json.status, type: $json.type, userId: $json.userId }) }}",
+        "options": { "timeout": 120000 }
+      },
+      "id": "a9c0efce-5766-4345-b66a-c99101d3fc08",
+      "name": "Publish to GoHighLevel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-40, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Validate Publish Request').item.json;\nconst response = $json;\nconst post = response.results?.post;\nif (!response.success || !post?._id) throw new Error(response.message || 'GoHighLevel did not return a post ID');\nreturn [{ json: { contentId: request.contentId, status: post.status === 'published' ? 'published' : post.status === 'scheduled' ? 'scheduled' : 'approved', externalId: post._id, publishedAt: post.status === 'published' ? new Date().toISOString() : null, message: response.message || 'Content sent to GoHighLevel successfully.' } }];"
+      },
+      "id": "34326a04-5963-4573-a938-4e66d26562ba",
+      "name": "Create Publish Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "5e85ed69-c92c-49fe-9242-f43b6139daae",
+      "name": "Return Publish Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [470, 0]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Receive Approved Content": { "main": [[{ "node": "Validate Publish Request", "type": "main", "index": 0 }]] },
+    "Validate Publish Request": { "main": [[{ "node": "Publish to GoHighLevel", "type": "main", "index": 0 }]] },
+    "Publish to GoHighLevel": { "main": [[{ "node": "Create Publish Result", "type": "main", "index": 0 }]] },
+    "Create Publish Result": { "main": [[{ "node": "Return Publish Result", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": []
+}

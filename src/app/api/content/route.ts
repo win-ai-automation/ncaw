@@ -122,7 +122,7 @@ export async function PATCH(request: Request) {
   if (action === 'request_revision' && !comment) return NextResponse.json({ error: 'A revision note is required' }, { status: 400 })
 
   const { data: version, error: versionError } = await supabase.from('content_versions')
-    .select('id').eq('content_id', id).order('version_number', { ascending: false }).limit(1).maybeSingle()
+    .select('*').eq('content_id', id).order('version_number', { ascending: false }).limit(1).maybeSingle()
   if (versionError) return NextResponse.json({ error: versionError.message }, { status: 500 })
   if (!version) return NextResponse.json({ error: 'No draft is available for review' }, { status: 409 })
 
@@ -139,5 +139,48 @@ export async function PATCH(request: Request) {
   const nextStatus = action === 'approve' ? 'approved' : 'revision_requested'
   const { data, error } = await supabase.from('content_items').update({ status: nextStatus }).eq('id', id).select().single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ data, message: action === 'approve' ? 'Content approved successfully.' : 'Revision requested successfully.' })
+  if (action === 'request_revision') return NextResponse.json({ data, message: 'Revision requested successfully.' })
+
+  const publishWebhookUrl = process.env.N8N_PUBLISH_WEBHOOK_URL
+  const webhookSecret = process.env.CONTENT_WEBHOOK_SECRET
+  const locationId = process.env.GHL_LOCATION_ID
+  const userId = process.env.GHL_USER_ID
+  const accountIds = (process.env.GHL_ACCOUNT_IDS ?? '').split(',').map((value) => value.trim()).filter(Boolean)
+  if (!publishWebhookUrl || !webhookSecret || !locationId || !userId || accountIds.length === 0) {
+    return NextResponse.json({ data, message: 'Content approved successfully.', warning: 'Publishing is not configured yet. The content remains approved.' })
+  }
+
+  try {
+    const publishResponse = await fetch(publishWebhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-content-secret': webhookSecret },
+      body: JSON.stringify({ contentId: data.id, title: data.title, platform: data.platform, sourceUrl: data.source_url, versionId: version.id, versionNumber: version.version_number, draft: version.editor_content, generatedPayload: version.generated_payload, locationId, userId, accountIds }),
+      signal: AbortSignal.timeout(125000),
+    })
+    const publishResult = await publishResponse.json().catch(() => null) as { status?: string; externalId?: string; publishedAt?: string; message?: string } | null
+    if (!publishResponse.ok) throw new Error(publishResult?.message || `n8n returned ${publishResponse.status}`)
+    const publishStatus = publishResult?.status === 'published' ? 'published' : publishResult?.status === 'scheduled' ? 'scheduled' : 'approved'
+    const { data: publishedItem, error: publishUpdateError } = await supabase.from('content_items').update({ status: publishStatus, external_job_id: publishResult?.externalId || data.external_job_id, published_at: publishStatus === 'published' ? publishResult?.publishedAt || new Date().toISOString() : null }).eq('id', id).select().single()
+    if (publishUpdateError) throw publishUpdateError
+    return NextResponse.json({ data: publishedItem, message: publishResult?.message || (publishStatus === 'published' ? 'Content approved and published successfully.' : 'Content approved and sent to publishing.') })
+  } catch (publishError) {
+    return NextResponse.json({ data, message: 'Content approved successfully.', warning: publishError instanceof Error ? `Publishing failed: ${publishError.message}` : 'Publishing failed. The content remains approved.' })
+  }
+}
+
+export async function DELETE(request: Request) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { data: profile, error: profileError } = await supabase.from('profiles').select('role').eq('id', user.id).single()
+  if (profileError || profile?.role !== 'admin') return NextResponse.json({ error: 'Only administrators can delete content.' }, { status: 403 })
+
+  const body = await request.json().catch(() => null) as { id?: unknown } | null
+  const id = typeof body?.id === 'string' ? body.id : ''
+  if (!id) return NextResponse.json({ error: 'Content ID is required' }, { status: 400 })
+
+  const { error } = await supabase.from('content_items').delete().eq('id', id)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ message: 'Content deleted successfully.' })
 }

@@ -27,6 +27,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Trash2,
   LogOut,
   UserRound,
   X,
@@ -533,6 +534,7 @@ function ContentIntakePanel() {
 
   return <section className="content-intake-page">
     <header><div><h1>Submit content</h1><p>Add a source for the content automation workflow.</p></div></header>
+    <div className="content-intake-layout">
     <form className="content-intake-card" onSubmit={submit} noValidate>
       {error && <div className="content-form-message error"><CircleAlert />{error}</div>}
       {success && <div className="content-form-message success"><Check />{success}</div>}
@@ -543,6 +545,17 @@ function ContentIntakePanel() {
       <label>Instructions for AI <small>Optional</small><textarea className="content-notes" value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="Audience, tone, output requirements, or context..." /></label>
       <footer><p><ShieldCheck />Human review is required before publication.</p><button className="primary-btn" disabled={submitting}>{submitting ? 'Submitting...' : 'Submit content'}</button></footer>
     </form>
+    <aside className="content-guide-card">
+      <header><div><h2>How it works</h2><p>Turn a source into a review-ready draft.</p></div></header>
+      <ol>
+        <li><span>1</span><div><strong>Add your source</strong><p>Enter a clear title, then paste a public URL or the original content.</p></div></li>
+        <li><span>2</span><div><strong>Guide the AI</strong><p>Add an audience, tone, format, or key points under Instructions for AI.</p></div></li>
+        <li><span>3</span><div><strong>Review the draft</strong><p>n8n generates the draft and sends it to Review queue for approval.</p></div></li>
+      </ol>
+      <section className="content-guide-tip"><div><strong>Before you submit</strong><p>Remove sensitive client data and verify all tax, legal, deadline, and rate information.</p></div></section>
+      <footer><FileText /><span>You can follow the result in <Link href="/queue">Review queue</Link>.</span></footer>
+    </aside>
+    </div>
     {showProgress && <div className="workflow-progress-backdrop" role="presentation">
       <section className={`workflow-progress-modal ${progressState}`} role="alertdialog" aria-modal="true" aria-labelledby="workflow-progress-title" aria-describedby="workflow-progress-message">
         <div className="workflow-progress-icon">{progressState === 'success' ? <Check /> : progressState === 'error' ? <CircleAlert /> : <Sparkles />}</div>
@@ -567,6 +580,7 @@ function ReviewQueuePanel() {
   const [revisionNote, setRevisionNote] = useState('')
   const [actionPending, setActionPending] = useState(false)
   const [actionMessage, setActionMessage] = useState('')
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   async function reviewItem(action: 'approve' | 'request_revision') {
     const item = items.find((entry) => entry.id === selectedId)
@@ -579,15 +593,41 @@ function ReviewQueuePanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: item.id, action, comment: revisionNote }),
       })
-      const payload = await response.json() as { data?: QueueContent; error?: string; message?: string }
+      const payload = await response.json() as { data?: QueueContent; error?: string; message?: string; warning?: string }
       if (!response.ok) throw new Error(payload.error || 'Unable to update this content.')
-      const nextStatus = action === 'approve' ? 'approved' : 'revision_requested'
+      const nextStatus = payload.data?.status || (action === 'approve' ? 'approved' : 'revision_requested')
       setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, status: nextStatus } : entry))
-      setActionMessage(payload.message || (action === 'approve' ? 'Content approved successfully.' : 'Revision requested successfully.'))
+      setActionMessage(payload.warning ? `${payload.message || 'Content approved.'} ${payload.warning}` : payload.message || (action === 'approve' ? 'Content approved successfully.' : 'Revision requested successfully.'))
       setRevisionOpen(false)
       setRevisionNote('')
     } catch (caught) {
       setActionMessage(caught instanceof Error ? caught.message : 'Unable to update this content.')
+    } finally {
+      setActionPending(false)
+    }
+  }
+
+  async function deleteItem() {
+    const item = items.find((entry) => entry.id === selectedId)
+    if (!item || actionPending) return
+    setActionPending(true)
+    setActionMessage('')
+    try {
+      const response = await fetch('/api/content', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: item.id }),
+      })
+      const payload = await response.json() as { error?: string; message?: string }
+      if (!response.ok) throw new Error(payload.error || 'Unable to delete this content.')
+      const remaining = items.filter((entry) => entry.id !== item.id)
+      setItems(remaining)
+      setSelectedId(remaining[0]?.id || '')
+      setDeleteOpen(false)
+      setActionMessage(payload.message || 'Content deleted successfully.')
+    } catch (caught) {
+      setDeleteOpen(false)
+      setActionMessage(caught instanceof Error ? caught.message : 'Unable to delete this content.')
     } finally {
       setActionPending(false)
     }
@@ -660,6 +700,7 @@ function ReviewQueuePanel() {
               <button onClick={async () => { await navigator.clipboard.writeText(active.id); setActionMessage('Content ID copied.'); setMenuOpen(false) }}><Copy />Copy content ID</button>
               {active.source_url && <a href={active.source_url} target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><ExternalLink />Open source URL</a>}
               <button onClick={() => { setMenuOpen(false); window.location.reload() }}><History />Refresh content</button>
+              <button className="danger" onClick={() => { setMenuOpen(false); setDeleteOpen(true); setActionMessage('') }}><Trash2 />Delete content</button>
             </div>}
           </div>
         </header>
@@ -669,7 +710,7 @@ function ReviewQueuePanel() {
           <section><header><strong>ORIGINAL CONTENT</strong><span>{active.raw_content?.length ?? 0} characters</span></header><div className="review-copy">{active.raw_content || 'The original content will be extracted from the source URL.'}</div></section>
           <section><header><strong><Sparkles />NETFINTAX DRAFT</strong><span>{active.latest_version ? `Version ${active.latest_version.version_number}` : 'Not ready'}</span></header><div className={`review-copy ${!draft ? 'empty' : ''}`}>{draft || (active.status === 'processing' || active.status === 'received' ? 'The AI draft is still being generated.' : 'No generated draft is available.')}</div></section>
         </div>
-        <footer className="live-review-actions"><button className="request-revision-btn" disabled={!active.latest_version || actionPending} onClick={() => { setRevisionOpen(true); setActionMessage('') }}><MessageSquareText />Request revision</button><button className="approve-review-btn" disabled={!active.latest_version || actionPending || active.status === 'approved'} onClick={() => reviewItem('approve')}><Check />{actionPending ? 'Saving...' : active.status === 'approved' ? 'Approved' : 'Approve content'}</button></footer>
+        <footer className="live-review-actions"><button className="request-revision-btn" disabled={!active.latest_version || actionPending || active.status === 'published'} onClick={() => { setRevisionOpen(true); setActionMessage('') }}><MessageSquareText />Request revision</button><button className="approve-review-btn" disabled={!active.latest_version || actionPending || ['approved', 'scheduled', 'published'].includes(active.status)} onClick={() => reviewItem('approve')}><Check />{actionPending ? 'Publishing...' : active.status === 'published' ? 'Published' : active.status === 'scheduled' ? 'Scheduled' : active.status === 'approved' ? 'Approved' : 'Approve content'}</button></footer>
       </article>}
     </div>}
     {revisionOpen && <div className="modal-wrap">
@@ -680,6 +721,14 @@ function ReviewQueuePanel() {
         <label>Revision note <span>*</span><textarea autoFocus required maxLength={5000} value={revisionNote} onChange={(event) => setRevisionNote(event.target.value)} placeholder="Explain the required changes..." /></label>
         <div className="modal-actions"><button type="button" className="secondary-btn" disabled={actionPending} onClick={() => setRevisionOpen(false)}>Cancel</button><button className="primary-btn" disabled={actionPending || !revisionNote.trim()}>{actionPending ? 'Saving...' : 'Send revision request'}</button></div>
       </form>
+    </div>}
+    {deleteOpen && <div className="modal-wrap">
+      <section className="modal delete-content-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-content-title">
+        <div className="modal-icon danger"><Trash2 /></div>
+        <h2 id="delete-content-title">Delete content?</h2>
+        <p className="modal-copy">This permanently deletes <strong>{active?.title}</strong>, including its generated versions and review history. This action cannot be undone.</p>
+        <div className="modal-actions"><button type="button" className="secondary-btn" disabled={actionPending} onClick={() => setDeleteOpen(false)}>Cancel</button><button type="button" className="delete-content-btn" disabled={actionPending} onClick={deleteItem}>{actionPending ? 'Deleting...' : 'Delete content'}</button></div>
+      </section>
     </div>}
   </section>
 }
