@@ -17,7 +17,7 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { data: items, error } = await supabase.from('content_items')
-    .select('id,title,platform,status,created_at,updated_at,published_at')
+    .select('id,title,platform,status,created_at,updated_at,scheduled_at,published_at')
     .order('created_at', { ascending: false }).limit(100)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
@@ -36,7 +36,8 @@ export async function GET() {
     events.push({ id: `submitted-${item.id}`, contentId: item.id, title: item.title, action: 'Content submitted', detail: `Source received from ${item.platform}.`, status: 'received', createdAt: item.created_at })
     if (['processing', 'failed', 'scheduled', 'published'].includes(item.status)) {
       const labels: Record<string, string> = { processing: 'Processing started', failed: 'Workflow failed', scheduled: 'Publication scheduled', published: 'Content published' }
-      events.push({ id: `status-${item.id}-${item.status}`, contentId: item.id, title: item.title, action: labels[item.status], detail: item.status === 'published' ? 'Published through GoHighLevel.' : `Current status: ${item.status}.`, status: item.status, createdAt: item.published_at || item.updated_at })
+      const detail = item.status === 'published' ? 'Published through GoHighLevel.' : item.status === 'scheduled' && item.scheduled_at ? `Scheduled for ${new Date(item.scheduled_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.` : `Current status: ${item.status}.`
+      events.push({ id: `status-${item.id}-${item.status}`, contentId: item.id, title: item.title, action: labels[item.status], detail, status: item.status, createdAt: item.published_at || item.updated_at })
     }
   }
   for (const version of versions ?? []) {

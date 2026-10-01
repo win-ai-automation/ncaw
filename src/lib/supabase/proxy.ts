@@ -33,7 +33,7 @@ export async function updateSession(request: NextRequest) {
   }
   if (user && ['/auth/sign-in', '/auth/sign-up', '/auth/forgot-password'].includes(pathname)) {
     const redirectUrl = request.nextUrl.clone()
-    redirectUrl.pathname = '/'
+    redirectUrl.pathname = '/content'
     redirectUrl.search = ''
     return NextResponse.redirect(redirectUrl)
   }

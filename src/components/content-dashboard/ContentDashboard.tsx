@@ -11,6 +11,7 @@ import {
   ChevronDown,
   CircleAlert,
   Copy,
+  Download,
   Clock3,
   ExternalLink,
   FileText,
@@ -66,17 +67,50 @@ type QueueContent = {
   status: string
   risk_level: string
   risk_flags: unknown
+  target_account_ids: unknown
+  scheduled_at: string | null
   created_at: string
   latest_version: null | {
     id: string
     version_number: number
     editor_content: string | null
     generated_payload: unknown
+    change_note: string | null
     created_at: string
   }
+  versions: Array<{
+    id: string
+    version_number: number
+    editor_content: string | null
+    generated_payload: unknown
+    change_note: string | null
+    created_at: string
+  }>
 }
 
 type HistoryEvent = { id: string; contentId: string; title: string; action: string; detail: string; status: string; createdAt: string }
+type SocialAccount = { id: string; name: string; platform: string }
+type ContentAsset = { id: string; version_id: string; asset_type: string; storage_path: string; mime_type: string; created_at: string; url: string | null }
+type DraftOutputView = 'caseStudy' | 'accuracyReview' | 'facebook' | 'linkedin' | 'threads' | 'instagram' | 'email' | 'complianceNotes'
+
+function draftOutput(payload: unknown, view: DraftOutputView, fallback: string) {
+  const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
+  const social = root.socialPack && typeof root.socialPack === 'object' ? root.socialPack as Record<string, unknown> : {}
+  const value = view === 'caseStudy' ? root.caseStudyMarkdown ?? fallback : view === 'accuracyReview' ? root.accuracyReview : view === 'complianceNotes' ? root.complianceNotes : social[view]
+  if (typeof value === 'string') return value
+  if (view === 'facebook' && value == null && typeof social.linkedin === 'string') return social.linkedin
+  if (view === 'instagram' && Array.isArray(value)) {
+    return value.map((item, index) => {
+      if (!item || typeof item !== 'object') return `Slide ${index + 1}\n${String(item)}`
+      const slide = item as Record<string, unknown>
+      const number = typeof slide.slide === 'number' || typeof slide.slide === 'string' ? slide.slide : index + 1
+      const heading = typeof slide.heading === 'string' ? slide.heading.trim() : ''
+      const body = typeof slide.body === 'string' ? slide.body.trim() : ''
+      return [`SLIDE ${number}${heading ? ` — ${heading}` : ''}`, body].filter(Boolean).join('\n')
+    }).join('\n\n')
+  }
+  return value == null ? '' : String(value)
+}
 
 const seedItems: Item[] = [
   {
@@ -582,6 +616,22 @@ function ReviewQueuePanel() {
   const [publishProgress, setPublishProgress] = useState(0)
   const [publishMessage, setPublishMessage] = useState('')
   const [publishState, setPublishState] = useState<'processing' | 'success' | 'error'>('processing')
+  const [editorDraft, setEditorDraft] = useState('')
+  const [changeNote, setChangeNote] = useState('')
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null)
+  const [publishOptionsOpen, setPublishOptionsOpen] = useState(false)
+  const [socialAccounts, setSocialAccounts] = useState<SocialAccount[]>([])
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([])
+  const [scheduleMode, setScheduleMode] = useState<'now' | 'scheduled'>('now')
+  const [scheduleDate, setScheduleDate] = useState('')
+  const [configLoading, setConfigLoading] = useState(false)
+  const [outputView, setOutputView] = useState<DraftOutputView>('caseStudy')
+  const [compareOpen, setCompareOpen] = useState(false)
+  const [compareFrom, setCompareFrom] = useState<number | null>(null)
+  const [compareTo, setCompareTo] = useState<number | null>(null)
+  const [assetsOpen, setAssetsOpen] = useState(false)
+  const [assets, setAssets] = useState<ContentAsset[]>([])
+  const [assetsLoading, setAssetsLoading] = useState(false)
 
   useEffect(() => {
     if (!publishProgressOpen) return
@@ -589,6 +639,50 @@ function ReviewQueuePanel() {
     document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = previousOverflow }
   }, [publishProgressOpen])
+
+  const selectedItem = items.find((entry) => entry.id === selectedId)
+  useEffect(() => {
+    setEditorDraft(selectedItem?.latest_version?.editor_content || '')
+    setSelectedVersion(selectedItem?.latest_version?.version_number ?? null)
+    setChangeNote('')
+    setOutputView('caseStudy')
+  }, [selectedId, selectedItem?.latest_version?.id])
+
+  async function saveDraft() {
+    const item = items.find((entry) => entry.id === selectedId)
+    if (!item?.latest_version || !editorDraft.trim() || actionPending) return
+    setActionPending(true)
+    setActionMessage('')
+    try {
+      const response = await fetch('/api/content', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: item.id, action: 'save_draft', draft: editorDraft, changeNote }) })
+      const payload = await response.json() as { data?: QueueContent['latest_version']; error?: string; message?: string }
+      if (!response.ok || !payload.data) throw new Error(payload.error || 'Unable to save this draft.')
+      const saved = payload.data
+      setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, status: 'pending_review', latest_version: saved, versions: [saved!, ...(entry.versions || [])] } : entry))
+      setSelectedVersion(saved.version_number)
+      setChangeNote('')
+      setActionMessage(payload.message || 'Draft saved successfully.')
+    } catch (caught) {
+      setActionMessage(caught instanceof Error ? caught.message : 'Unable to save this draft.')
+    } finally { setActionPending(false) }
+  }
+
+  async function openPublishOptions() {
+    setActionMessage('')
+    setConfigLoading(true)
+    setPublishOptionsOpen(true)
+    try {
+      const response = await fetch('/api/publishing-config', { cache: 'no-store' })
+      const payload = await response.json() as { data?: { accounts?: SocialAccount[] }; error?: string }
+      if (!response.ok) throw new Error(payload.error || 'Unable to load publishing accounts.')
+      const accounts = payload.data?.accounts ?? []
+      setSocialAccounts(accounts)
+      setSelectedAccountIds(accounts.map((account) => account.id))
+    } catch (caught) {
+      setActionMessage(caught instanceof Error ? caught.message : 'Unable to load publishing accounts.')
+      setPublishOptionsOpen(false)
+    } finally { setConfigLoading(false) }
+  }
 
   async function reviewItem(action: 'approve' | 'request_revision') {
     const item = items.find((entry) => entry.id === selectedId)
@@ -620,7 +714,7 @@ function ReviewQueuePanel() {
       const response = await fetch('/api/content', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: item.id, action, comment: revisionNote }),
+        body: JSON.stringify({ id: item.id, action, comment: revisionNote, draft: editorDraft, changeNote, accountIds: action === 'approve' ? selectedAccountIds : undefined, scheduleDate: action === 'approve' && scheduleMode === 'scheduled' ? new Date(scheduleDate).toISOString() : undefined }),
       })
       const payload = await response.json() as { data?: QueueContent; error?: string; message?: string; warning?: string }
       if (!response.ok) throw new Error(payload.error || 'Unable to update this content.')
@@ -634,6 +728,7 @@ function ReviewQueuePanel() {
         setPublishMessage(resultMessage)
       }
       setRevisionOpen(false)
+      setPublishOptionsOpen(false)
       setRevisionNote('')
     } catch (caught) {
       const resultMessage = caught instanceof Error ? caught.message : 'Unable to update this content.'
@@ -705,7 +800,34 @@ function ReviewQueuePanel() {
   })
   const active = items.find((item) => item.id === selectedId) ?? filteredItems[0]
   const flags = Array.isArray(active?.risk_flags) ? active.risk_flags.filter((flag): flag is string => typeof flag === 'string') : []
-  const draft = active?.latest_version?.editor_content || ''
+  const versions = active?.versions || []
+  const viewedVersion = versions.find((entry) => entry.version_number === selectedVersion) ?? active?.latest_version
+  const displayedOutput = outputView === 'caseStudy' ? editorDraft : draftOutput(viewedVersion?.generated_payload, outputView, editorDraft)
+  const fromVersion = versions.find((entry) => entry.version_number === compareFrom)
+  const toVersion = versions.find((entry) => entry.version_number === compareTo)
+
+  function openVersionCompare() {
+    if (versions.length < 2) return
+    setCompareTo(versions[0].version_number)
+    setCompareFrom(versions[1].version_number)
+    setCompareOpen(true)
+  }
+
+  async function openAssets() {
+    if (!active) return
+    setMenuOpen(false)
+    setAssetsLoading(true)
+    setAssetsOpen(true)
+    try {
+      const response = await fetch(`/api/content/assets?contentId=${encodeURIComponent(active.id)}`, { cache: 'no-store' })
+      const payload = await response.json() as { data?: ContentAsset[]; error?: string }
+      if (!response.ok) throw new Error(payload.error || 'Unable to load generated files.')
+      setAssets(payload.data ?? [])
+    } catch (caught) {
+      setActionMessage(caught instanceof Error ? caught.message : 'Unable to load generated files.')
+      setAssetsOpen(false)
+    } finally { setAssetsLoading(false) }
+  }
 
   return <section className="live-queue-page">
     <header className="live-queue-heading">
@@ -722,6 +844,8 @@ function ReviewQueuePanel() {
             <option value="processing">Processing</option>
             <option value="failed">Failed</option>
             <option value="approved">Approved</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="published">Published</option>
             <option value="revision_requested">Needs revision</option>
           </select>
         </div>
@@ -742,19 +866,49 @@ function ReviewQueuePanel() {
             {menuOpen && <div className="review-more-menu">
               <button onClick={async () => { await navigator.clipboard.writeText(active.id); setActionMessage('Content ID copied.'); setMenuOpen(false) }}><Copy />Copy content ID</button>
               {active.source_url && <a href={active.source_url} target="_blank" rel="noreferrer" onClick={() => setMenuOpen(false)}><ExternalLink />Open source URL</a>}
+              <button onClick={openAssets}><Download />Generated files</button>
               <button onClick={() => { setMenuOpen(false); window.location.reload() }}><History />Refresh content</button>
               <button className="danger" onClick={() => { setMenuOpen(false); setDeleteOpen(true); setActionMessage('') }}><Trash2 />Delete content</button>
             </div>}
           </div>
         </header>
         {actionMessage && <div className="review-action-message"><Check />{actionMessage}</div>}
+        {active.status === 'scheduled' && active.scheduled_at && <div className="review-schedule-banner"><Clock3 /><div><strong>Publication scheduled</strong><p>{new Date(active.scheduled_at).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' })} · {Array.isArray(active.target_account_ids) ? active.target_account_ids.length : 0} account(s)</p></div></div>}
         {flags.length > 0 && <div className="live-risk-banner"><CircleAlert /><div><strong>{flags.length} items require verification</strong><p>{flags[0]}</p></div></div>}
         <div className="live-review-columns">
           <section><header><strong>ORIGINAL CONTENT</strong><span>{active.raw_content?.length ?? 0} characters</span></header><div className="review-copy">{active.raw_content || 'The original content will be extracted from the source URL.'}</div></section>
-          <section><header><strong><Sparkles />NETFINTAX DRAFT</strong><span>{active.latest_version ? `Version ${active.latest_version.version_number}` : 'Not ready'}</span></header><div className={`review-copy ${!draft ? 'empty' : ''}`}>{draft || (active.status === 'processing' || active.status === 'received' ? 'The AI draft is still being generated.' : 'No generated draft is available.')}</div></section>
+          <section className="draft-editor-card"><header><strong><Sparkles />NETFINTAX OUTPUT</strong><div className="draft-output-selectors"><select aria-label="Select AI output" value={outputView} onChange={(event) => setOutputView(event.target.value as DraftOutputView)}><option value="caseStudy">Case study</option><option value="accuracyReview">Accuracy review</option><option value="facebook">Facebook</option><option value="linkedin">LinkedIn</option><option value="threads">Threads / X</option><option value="instagram">Instagram</option><option value="email">Email</option><option value="complianceNotes">Compliance</option></select>{versions.length > 0 ? <select aria-label="Select draft version" value={selectedVersion ?? ''} onChange={(event) => { const version = versions.find((entry) => entry.version_number === Number(event.target.value)); if (version) { setSelectedVersion(version.version_number); setEditorDraft(version.editor_content || '') } }}>{versions.map((version) => <option key={version.id} value={version.version_number}>Version {version.version_number}</option>)}</select> : <span>Not ready</span>}{versions.length > 1 && <button type="button" className="draft-compare-btn" onClick={openVersionCompare}><History />Compare</button>}</div></header><textarea className={!displayedOutput ? 'empty' : ''} value={displayedOutput} onChange={(event) => outputView === 'caseStudy' && setEditorDraft(event.target.value)} readOnly={outputView !== 'caseStudy'} disabled={!active.latest_version || (outputView === 'caseStudy' && ['published', 'scheduled'].includes(active.status))} placeholder={active.status === 'processing' || active.status === 'received' ? 'The AI output is still being generated.' : `No ${outputView} output is available in this version.`} /></section>
         </div>
-        <footer className="live-review-actions"><button className="request-revision-btn" disabled={!active.latest_version || actionPending || active.status === 'published'} onClick={() => { setRevisionOpen(true); setActionMessage('') }}><MessageSquareText />Request revision</button><button className="approve-review-btn" disabled={!active.latest_version || actionPending || ['approved', 'scheduled', 'published'].includes(active.status)} onClick={() => reviewItem('approve')}><Check />{actionPending ? 'Publishing...' : active.status === 'published' ? 'Published' : active.status === 'scheduled' ? 'Scheduled' : active.status === 'approved' ? 'Approved' : 'Approve content'}</button></footer>
+        <div className="draft-change-note"><input value={changeNote} onChange={(event) => setChangeNote(event.target.value)} maxLength={1000} disabled={!active.latest_version || ['published', 'scheduled'].includes(active.status)} placeholder="Describe your edit (optional)..." /></div>
+        <footer className="live-review-actions"><button className="request-revision-btn" disabled={!active.latest_version || actionPending || active.status === 'published'} onClick={() => { setRevisionOpen(true); setActionMessage('') }}><MessageSquareText />Request revision</button><button className="secondary-btn save-draft-btn" disabled={!active.latest_version || actionPending || !editorDraft.trim() || editorDraft.trim() === (active.latest_version.editor_content || '').trim() || ['published', 'scheduled'].includes(active.status)} onClick={saveDraft}><FileText />{actionPending ? 'Saving...' : 'Save draft'}</button><button className="approve-review-btn" disabled={!active.latest_version || actionPending || ['approved', 'scheduled', 'published'].includes(active.status)} onClick={openPublishOptions}><Check />{active.status === 'published' ? 'Published' : active.status === 'scheduled' ? 'Scheduled' : active.status === 'approved' ? 'Approved' : 'Approve content'}</button></footer>
       </article>}
+    </div>}
+    {publishOptionsOpen && <div className="modal-wrap">
+      <form className="modal publish-options-modal" onSubmit={(event) => { event.preventDefault(); reviewItem('approve') }}>
+        <div className="modal-icon"><Send /></div><button type="button" className="icon-btn modal-close" onClick={() => setPublishOptionsOpen(false)}><X /></button>
+        <h2>Approve and publish</h2><p className="modal-copy">Choose where and when this approved version will be published.</p>
+        <fieldset><legend>Social accounts</legend>{configLoading ? <p>Loading accounts...</p> : socialAccounts.length === 0 ? <p>No publishing accounts are configured.</p> : socialAccounts.map((account) => <label className="publish-account" key={account.id}><input type="checkbox" checked={selectedAccountIds.includes(account.id)} onChange={(event) => setSelectedAccountIds((current) => event.target.checked ? [...current, account.id] : current.filter((id) => id !== account.id))} /><span><strong>{account.name}</strong><small>{account.platform}</small></span></label>)}</fieldset>
+        <fieldset><legend>Publishing time</legend><label className="publish-radio"><input type="radio" name="schedule-mode" checked={scheduleMode === 'now'} onChange={() => setScheduleMode('now')} />Publish now</label><label className="publish-radio"><input type="radio" name="schedule-mode" checked={scheduleMode === 'scheduled'} onChange={() => setScheduleMode('scheduled')} />Schedule for later</label>{scheduleMode === 'scheduled' && <input className="publish-datetime" type="datetime-local" required value={scheduleDate} min={new Date(Date.now() + 120000).toISOString().slice(0, 16)} onChange={(event) => setScheduleDate(event.target.value)} />}</fieldset>
+        <div className="modal-actions"><button type="button" className="secondary-btn" disabled={actionPending} onClick={() => setPublishOptionsOpen(false)}>Cancel</button><button className="primary-btn" disabled={actionPending || configLoading || selectedAccountIds.length === 0 || (scheduleMode === 'scheduled' && !scheduleDate)}>{actionPending ? 'Publishing...' : scheduleMode === 'scheduled' ? 'Approve & schedule' : 'Approve & publish'}</button></div>
+      </form>
+    </div>}
+    {compareOpen && <div className="modal-wrap">
+      <section className="modal version-compare-modal" role="dialog" aria-modal="true" aria-labelledby="version-compare-title">
+        <button type="button" className="icon-btn modal-close" onClick={() => setCompareOpen(false)}><X /></button>
+        <div className="modal-icon"><History /></div><h2 id="version-compare-title">Compare versions</h2><p className="modal-copy">Review the draft before and after editing.</p>
+        <div className="version-compare-grid">
+          <article><header><select value={compareFrom ?? ''} onChange={(event) => setCompareFrom(Number(event.target.value))}>{versions.map((version) => <option key={version.id} value={version.version_number}>Version {version.version_number}</option>)}</select><time>{fromVersion ? new Date(fromVersion.created_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : ''}</time></header><p className="version-change-note">{fromVersion?.change_note || 'Original AI-generated draft'}</p><pre>{fromVersion?.editor_content || 'No content'}</pre></article>
+          <article><header><select value={compareTo ?? ''} onChange={(event) => setCompareTo(Number(event.target.value))}>{versions.map((version) => <option key={version.id} value={version.version_number}>Version {version.version_number}</option>)}</select><time>{toVersion ? new Date(toVersion.created_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : ''}</time></header><p className="version-change-note">{toVersion?.change_note || 'Original AI-generated draft'}</p><pre>{toVersion?.editor_content || 'No content'}</pre></article>
+        </div>
+        <div className="modal-actions"><button type="button" className="primary-btn" onClick={() => setCompareOpen(false)}>Done</button></div>
+      </section>
+    </div>}
+    {assetsOpen && <div className="modal-wrap">
+      <section className="modal assets-modal" role="dialog" aria-modal="true" aria-labelledby="assets-title">
+        <button type="button" className="icon-btn modal-close" onClick={() => setAssetsOpen(false)}><X /></button><div className="modal-icon"><Download /></div><h2 id="assets-title">Generated files</h2><p className="modal-copy">Download versioned assets stored securely in Supabase.</p>
+        {assetsLoading ? <div className="assets-empty">Loading files...</div> : assets.length === 0 ? <div className="assets-empty">No generated files are available for this content yet.</div> : <div className="assets-list">{assets.map((asset) => <a key={asset.id} href={asset.url || '#'} target="_blank" rel="noreferrer" className={!asset.url ? 'disabled' : ''}><span><FileText /><span><strong>{asset.asset_type.replaceAll('_', ' ')}</strong><small>{asset.storage_path.split('/').at(-2)} · {new Date(asset.created_at).toLocaleDateString('en-US')}</small></span></span><Download /></a>)}</div>}
+        <div className="modal-actions"><button type="button" className="primary-btn" onClick={() => setAssetsOpen(false)}>Done</button></div>
+      </section>
     </div>}
     {revisionOpen && <div className="modal-wrap">
       <form className="modal revision-modal" onSubmit={(event) => { event.preventDefault(); reviewItem('request_revision') }}>

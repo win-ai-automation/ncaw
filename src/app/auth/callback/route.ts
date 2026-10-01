@@ -7,8 +7,8 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get('code')
   const tokenHash = searchParams.get('token_hash')
   const type = searchParams.get('type') as EmailOtpType | null
-  const requestedNext = searchParams.get('next') ?? '/'
-  const next = requestedNext.startsWith('/') && !requestedNext.startsWith('//') ? requestedNext : '/'
+  const requestedNext = searchParams.get('next') ?? '/content'
+  const next = requestedNext.startsWith('/') && !requestedNext.startsWith('//') ? requestedNext : '/content'
   const supabase = await createClient()
   let error: Error | null = null
   if (code) ({ error } = await supabase.auth.exchangeCodeForSession(code))

@@ -116,8 +116,7 @@ export default function AuthCard({ mode }: { mode: Mode }) {
       if (mode === 'sign-in') {
         const { error: authError } = await supabase.auth.signInWithPassword({ email, password })
         if (authError) throw authError
-        const next = searchParams.get('next')
-        router.replace(next?.startsWith('/') && !next.startsWith('//') ? next : '/')
+        router.replace('/content')
         router.refresh()
       } else if (mode === 'sign-up') {
         const { error: authError } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName.trim() }, emailRedirectTo: `${window.location.origin}/auth/callback` } })
@@ -131,7 +130,7 @@ export default function AuthCard({ mode }: { mode: Mode }) {
         const { error: authError } = await supabase.auth.updateUser({ password })
         if (authError) throw authError
         setSuccess('Your password has been updated. Redirecting to the dashboard…')
-        window.setTimeout(() => { router.replace('/'); router.refresh() }, 1000)
+        window.setTimeout(() => { router.replace('/content'); router.refresh() }, 1000)
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Something went wrong. Please try again.')
