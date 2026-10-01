@@ -307,6 +307,9 @@ function App({ section = 'overview', identity }: { section?: DashboardSection; i
           </div>
         </header>
 
+        {section === 'content' ? <ContentIntakePanel /> : <DashboardPageSkeleton />}
+
+        {false && <>
         <section className="page-head">
           <div><p className="eyebrow">REVIEW WORKSPACE</p><h1>{sectionCopy[section].title}</h1><p>{sectionCopy[section].description}</p></div>
           <button className="primary-btn page-submit" onClick={() => setShowSubmit(true)}><Plus size={17} /> Submit content</button>
@@ -321,7 +324,7 @@ function App({ section = 'overview', identity }: { section?: DashboardSection; i
         </section>}
 
         {section === 'history' || section === 'members' || section === 'settings' ? (
-          <SectionPlaceholder section={section} />
+          <SectionPlaceholder section={section as 'history' | 'members' | 'settings'} />
         ) : <section className="workspace">
           <div className="queue-panel">
             <div className="queue-tools">
@@ -375,6 +378,7 @@ function App({ section = 'overview', identity }: { section?: DashboardSection; i
             )}
           </div>
         </section>}
+        </>}
       </main>
 
       {showSubmit && <SubmitModal onClose={() => setShowSubmit(false)} onSubmit={(item) => { setItems([item, ...items]); selectItem(item); setShowSubmit(false); setToast('Content submitted for processing') }} />}
@@ -382,6 +386,81 @@ function App({ section = 'overview', identity }: { section?: DashboardSection; i
       {mobileNav && <div className="backdrop" onClick={() => setMobileNav(false)} />}
     </div>
   )
+}
+
+function DashboardPageSkeleton() {
+  return <section className="dashboard-page-skeleton" aria-label="Loading page content" aria-busy="true">
+    <div className="skeleton-heading">
+      <span className="skeleton-line skeleton-title" />
+      <span className="skeleton-line skeleton-subtitle" />
+    </div>
+    <div className="skeleton-stats">
+      {Array.from({ length: 5 }, (_, index) => <span className="skeleton-card" key={index} />)}
+    </div>
+    <div className="skeleton-workspace">
+      <div className="skeleton-list">
+        <span className="skeleton-toolbar" />
+        {Array.from({ length: 4 }, (_, index) => <span className="skeleton-list-item" key={index} />)}
+      </div>
+      <div className="skeleton-detail">
+        <span className="skeleton-line skeleton-detail-title" />
+        <span className="skeleton-line skeleton-detail-subtitle" />
+        <span className="skeleton-banner" />
+        <div className="skeleton-columns"><span /><span /></div>
+      </div>
+    </div>
+  </section>
+}
+
+function ContentIntakePanel() {
+  const [title, setTitle] = useState('')
+  const [url, setUrl] = useState('')
+  const [content, setContent] = useState('')
+  const [notes, setNotes] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError('')
+    setSuccess('')
+    if (!title.trim()) return setError('Enter a title for this content.')
+    if (!url.trim() && !content.trim()) return setError('Add a source URL or paste the source content.')
+    setSubmitting(true)
+    try {
+      const response = await fetch('/api/content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, url, content, notes }),
+      })
+      const payload = await response.json() as { data?: { id: string }; error?: string; warning?: string }
+      if (!response.ok) throw new Error(payload.error || 'Unable to submit content.')
+      setTitle('')
+      setUrl('')
+      setContent('')
+      setNotes('')
+      setSuccess(payload.warning || `Draft created and sent to review. Reference: ${payload.data?.id ?? ''}`)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to submit content.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return <section className="content-intake-page">
+    <header><div><span>CONTENT INTAKE</span><h1>Submit content</h1><p>Add a source for the content automation workflow.</p></div></header>
+    <form className="content-intake-card" onSubmit={submit} noValidate>
+      {error && <div className="content-form-message error"><CircleAlert />{error}</div>}
+      {success && <div className="content-form-message success"><Check />{success}</div>}
+      <label>Title <em>*</em><input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} placeholder="Enter a clear working title" /></label>
+      <label>Source URL <small>Use a public URL when available</small><div className="content-url-input"><Link2 /><input type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/content" /></div></label>
+      <div className="content-form-divider"><span>or paste the source</span></div>
+      <label>Source content <small>Up to 100,000 characters</small><textarea value={content} onChange={(event) => setContent(event.target.value)} maxLength={100000} placeholder="Paste the original article, transcript, or post here..." /></label>
+      <label>Instructions for AI <small>Optional</small><textarea className="content-notes" value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="Audience, tone, output requirements, or context..." /></label>
+      <footer><p><ShieldCheck />Human review is required before publication.</p><button className="primary-btn" disabled={submitting}>{submitting ? 'Submitting...' : 'Submit content'}</button></footer>
+    </form>
+  </section>
 }
 
 function SectionPlaceholder({ section }: { section: 'history' | 'members' | 'settings' }) {
