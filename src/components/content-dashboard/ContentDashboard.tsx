@@ -16,7 +16,6 @@ import {
   FileText,
   History,
   Inbox,
-  LayoutDashboard,
   Link2,
   Menu,
   MessageSquareText,
@@ -76,6 +75,8 @@ type QueueContent = {
     created_at: string
   }
 }
+
+type HistoryEvent = { id: string; contentId: string; title: string; action: string; detail: string; status: string; createdAt: string }
 
 const seedItems: Item[] = [
   {
@@ -276,13 +277,9 @@ function App({ section = 'overview', identity }: { section?: DashboardSection; i
         </div>
         <nav>
           <p className="nav-label">Workspace</p>
-          <Link href="/" className={section === 'overview' ? 'active' : ''} onClick={() => setMobileNav(false)} data-tooltip="Overview"><LayoutDashboard size={18} /><span className="nav-copy">Overview</span></Link>
-          <Link href="/queue" className={section === 'queue' ? 'active' : ''} onClick={() => setMobileNav(false)} data-tooltip="Review queue"><Inbox size={18} /><span className="nav-copy">Review queue</span><span className="nav-count">{items.filter(i => i.status === 'pending').length}</span></Link>
           <Link href="/content" className={section === 'content' ? 'active' : ''} onClick={() => setMobileNav(false)} data-tooltip="Content"><FileText size={18} /><span className="nav-copy">Content</span></Link>
+          <Link href="/queue" className={section === 'queue' ? 'active' : ''} onClick={() => setMobileNav(false)} data-tooltip="Review queue"><Inbox size={18} /><span className="nav-copy">Review queue</span><span className="nav-count">{items.filter(i => i.status === 'pending').length}</span></Link>
           <Link href="/history" className={section === 'history' ? 'active' : ''} onClick={() => setMobileNav(false)} data-tooltip="Activity history"><History size={18} /><span className="nav-copy">History</span></Link>
-          <p className="nav-label nav-section">Administration</p>
-          <Link href="/members" className={section === 'members' ? 'active' : ''} onClick={() => setMobileNav(false)} data-tooltip="Team members"><ShieldCheck size={18} /><span className="nav-copy">Team members</span></Link>
-          <Link href="/settings" className={section === 'settings' ? 'active' : ''} onClick={() => setMobileNav(false)} data-tooltip="Settings"><Settings size={18} /><span className="nav-copy">Settings</span></Link>
         </nav>
         <div className="sidebar-foot">
           <div className="mini-avatar">TD</div>
@@ -329,7 +326,7 @@ function App({ section = 'overview', identity }: { section?: DashboardSection; i
           </div>
         </header>
 
-        {section === 'content' ? <ContentIntakePanel /> : section === 'queue' ? <ReviewQueuePanel /> : <DashboardPageSkeleton />}
+        {section === 'content' ? <ContentIntakePanel /> : section === 'queue' ? <ReviewQueuePanel /> : section === 'history' ? <HistoryPanel /> : <DashboardPageSkeleton />}
 
         {false && <>
         <section className="page-head">
@@ -581,12 +578,44 @@ function ReviewQueuePanel() {
   const [actionPending, setActionPending] = useState(false)
   const [actionMessage, setActionMessage] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [publishProgressOpen, setPublishProgressOpen] = useState(false)
+  const [publishProgress, setPublishProgress] = useState(0)
+  const [publishMessage, setPublishMessage] = useState('')
+  const [publishState, setPublishState] = useState<'processing' | 'success' | 'error'>('processing')
+
+  useEffect(() => {
+    if (!publishProgressOpen) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = previousOverflow }
+  }, [publishProgressOpen])
 
   async function reviewItem(action: 'approve' | 'request_revision') {
     const item = items.find((entry) => entry.id === selectedId)
     if (!item || actionPending) return
     setActionPending(true)
     setActionMessage('')
+    let progressTimer: number | undefined
+    if (action === 'approve') {
+      setPublishProgressOpen(true)
+      setPublishState('processing')
+      setPublishProgress(10)
+      setPublishMessage('Approving the selected content...')
+      const stages = [
+        { progress: 30, message: 'Sending the approved draft to n8n...' },
+        { progress: 55, message: 'Preparing posts for Facebook and LinkedIn...' },
+        { progress: 78, message: 'Publishing through GoHighLevel...' },
+        { progress: 92, message: 'Waiting for publishing confirmation...' },
+      ]
+      let stageIndex = 0
+      progressTimer = window.setInterval(() => {
+        if (stageIndex < stages.length) {
+          setPublishProgress(stages[stageIndex].progress)
+          setPublishMessage(stages[stageIndex].message)
+          stageIndex += 1
+        }
+      }, 1300)
+    }
     try {
       const response = await fetch('/api/content', {
         method: 'PATCH',
@@ -597,13 +626,27 @@ function ReviewQueuePanel() {
       if (!response.ok) throw new Error(payload.error || 'Unable to update this content.')
       const nextStatus = payload.data?.status || (action === 'approve' ? 'approved' : 'revision_requested')
       setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, status: nextStatus } : entry))
-      setActionMessage(payload.warning ? `${payload.message || 'Content approved.'} ${payload.warning}` : payload.message || (action === 'approve' ? 'Content approved successfully.' : 'Revision requested successfully.'))
+      const resultMessage = payload.warning ? `${payload.message || 'Content approved.'} ${payload.warning}` : payload.message || (action === 'approve' ? 'Content approved successfully.' : 'Revision requested successfully.')
+      setActionMessage(resultMessage)
+      if (action === 'approve') {
+        setPublishProgress(100)
+        setPublishState(payload.warning ? 'error' : 'success')
+        setPublishMessage(resultMessage)
+      }
       setRevisionOpen(false)
       setRevisionNote('')
     } catch (caught) {
-      setActionMessage(caught instanceof Error ? caught.message : 'Unable to update this content.')
+      const resultMessage = caught instanceof Error ? caught.message : 'Unable to update this content.'
+      setActionMessage(resultMessage)
+      if (action === 'approve') {
+        setPublishProgress(100)
+        setPublishState('error')
+        setPublishMessage(resultMessage)
+      }
     } finally {
+      if (progressTimer) window.clearInterval(progressTimer)
       setActionPending(false)
+      if (action === 'approve') window.setTimeout(() => setPublishProgressOpen(false), 2500)
     }
   }
 
@@ -730,6 +773,78 @@ function ReviewQueuePanel() {
         <div className="modal-actions"><button type="button" className="secondary-btn" disabled={actionPending} onClick={() => setDeleteOpen(false)}>Cancel</button><button type="button" className="delete-content-btn" disabled={actionPending} onClick={deleteItem}>{actionPending ? 'Deleting...' : 'Delete content'}</button></div>
       </section>
     </div>}
+    {publishProgressOpen && <div className="workflow-progress-backdrop" role="presentation">
+      <section className={`workflow-progress-modal ${publishState}`} role="alertdialog" aria-modal="true" aria-labelledby="publish-progress-title" aria-describedby="publish-progress-message">
+        <div className="workflow-progress-icon">{publishState === 'success' ? <Check /> : publishState === 'error' ? <CircleAlert /> : <Send />}</div>
+        <h2 id="publish-progress-title">{publishState === 'processing' ? 'Publishing content' : publishState === 'success' ? 'Publishing completed' : 'Publishing failed'}</h2>
+        <p id="publish-progress-message">{publishMessage}</p>
+        <div className="workflow-progress-track" aria-label={`Publishing progress ${publishProgress}%`}><span style={{ width: `${publishProgress}%` }} /></div>
+        <strong>{publishProgress}%</strong>
+      </section>
+    </div>}
+  </section>
+}
+
+function HistoryPanel() {
+  const [events, setEvents] = useState<HistoryEvent[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState('all')
+
+  useEffect(() => {
+    let active = true
+    fetch('/api/history', { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = await response.json()
+        if (!response.ok) throw new Error(payload.error || 'Could not load activity history.')
+        if (active) setEvents(payload.data ?? [])
+      })
+      .catch((reason) => active && setError(reason instanceof Error ? reason.message : 'Could not load activity history.'))
+      .finally(() => active && setLoading(false))
+    return () => { active = false }
+  }, [])
+
+  const filteredEvents = useMemo(() => events.filter((event) => {
+    const matchesQuery = !query.trim() || `${event.title} ${event.action} ${event.detail}`.toLowerCase().includes(query.trim().toLowerCase())
+    return matchesQuery && (filter === 'all' || event.status === filter)
+  }), [events, filter, query])
+  const publishedCount = events.filter((event) => event.status === 'published').length
+  const approvedCount = events.filter((event) => event.status === 'approved').length
+  const attentionCount = events.filter((event) => ['failed', 'rejected', 'revision_requested'].includes(event.status)).length
+
+  if (loading) return <DashboardPageSkeleton />
+  if (error) return <section className="history-page"><div className="queue-state-card error"><CircleAlert /><strong>Could not load history</strong><p>{error}</p></div></section>
+
+  return <section className="history-page">
+    <header className="history-heading">
+      <div><span>ACTIVITY LOG</span><h1>Activity history</h1><p>Track every submission, draft, review decision, and publication.</p></div>
+      <Link className="primary-btn" href="/content"><Plus />Submit content</Link>
+    </header>
+    <div className="history-stats">
+      <article><span>Total activity</span><strong>{events.length}</strong><small>Latest 250 events</small></article>
+      <article><span>Approved</span><strong>{approvedCount}</strong><small>Review decisions</small></article>
+      <article><span>Published</span><strong>{publishedCount}</strong><small>Sent to GoHighLevel</small></article>
+      <article><span>Needs attention</span><strong>{attentionCount}</strong><small>Revision, rejected, or failed</small></article>
+    </div>
+    <div className="history-card">
+      <div className="history-toolbar">
+        <label><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search activity or content..." /></label>
+        <select value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filter activity">
+          <option value="all">All activity</option><option value="received">Submitted</option><option value="pending_review">Draft created</option><option value="revision_requested">Needs revision</option><option value="approved">Approved</option><option value="published">Published</option><option value="failed">Failed</option>
+        </select>
+      </div>
+      {filteredEvents.length === 0 ? <div className="history-empty"><History /><strong>No activity found</strong><p>{events.length ? 'Try another search or filter.' : 'New submissions and review actions will appear here.'}</p></div> :
+        <div className="history-list">{filteredEvents.map((event) => {
+          const EventIcon = event.status === 'published' ? Send : event.status === 'approved' ? Check : event.status === 'revision_requested' ? MessageSquareText : ['failed', 'rejected'].includes(event.status) ? CircleAlert : event.status === 'pending_review' ? FileText : Inbox
+          const date = new Date(event.createdAt)
+          return <article key={event.id}>
+            <span className={`history-event-icon status-${event.status}`}><EventIcon /></span>
+            <div className="history-event-copy"><div><strong>{event.action}</strong><span className={`queue-status status-${event.status}`}>{statusLabel(event.status)}</span></div><h2>{event.title}</h2><p>{event.detail}</p></div>
+            <div className="history-event-meta"><time dateTime={event.createdAt}>{Number.isNaN(date.getTime()) ? event.createdAt : date.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}</time><Link href="/queue">View content <ArrowRight /></Link></div>
+          </article>
+        })}</div>}
+    </div>
   </section>
 }
 

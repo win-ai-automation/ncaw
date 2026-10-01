@@ -43,7 +43,7 @@
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
-        "body": "={{ JSON.stringify({ accountIds: $json.accountIds, summary: $json.summary, status: $json.status, type: $json.type, userId: $json.userId }) }}",
+        "body": "={{ JSON.stringify({ accountIds: $json.accountIds, summary: $json.summary, media: [], status: $json.status, type: $json.type, userId: $json.userId }) }}",
         "options": { "timeout": 120000 }
       },
       "id": "a9c0efce-5766-4345-b66a-c99101d3fc08",
@@ -54,7 +54,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Validate Publish Request').item.json;\nconst response = $json;\nconst post = response.results?.post;\nif (!response.success || !post?._id) throw new Error(response.message || 'GoHighLevel did not return a post ID');\nreturn [{ json: { contentId: request.contentId, status: post.status === 'published' ? 'published' : post.status === 'scheduled' ? 'scheduled' : 'approved', externalId: post._id, publishedAt: post.status === 'published' ? new Date().toISOString() : null, message: response.message || 'Content sent to GoHighLevel successfully.' } }];"
+        "jsCode": "const request = $('Validate Publish Request').item.json;\nconst response = $json;\nif (!response.success || Number(response.statusCode) < 200 || Number(response.statusCode) >= 300) throw new Error(response.message || 'GoHighLevel rejected the post');\nconst post = response.results?.post ?? {};\nconst status = post.status === 'scheduled' ? 'scheduled' : request.status === 'published' || post.status === 'published' ? 'published' : 'approved';\nconst externalId = post._id ?? post.id ?? response.traceId ?? request.contentId;\nreturn [{ json: { contentId: request.contentId, status, externalId, publishedAt: status === 'published' ? new Date().toISOString() : null, message: response.message || 'Content sent to GoHighLevel successfully.' } }];"
       },
       "id": "34326a04-5963-4573-a938-4e66d26562ba",
       "name": "Create Publish Result",
