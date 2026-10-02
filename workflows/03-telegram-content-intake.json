@@ -1,0 +1,89 @@
+{
+  "name": "Netfintax 03 - Telegram Content Intake",
+  "nodes": [
+    {
+      "parameters": { "updates": ["message"], "additionalFields": {} },
+      "id": "telegram-trigger",
+      "name": "Receive Telegram Message",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 0],
+      "webhookId": "netfintax-telegram-content"
+    },
+    {
+      "parameters": {
+        "jsCode": "const message = $json.message ?? {};\nconst text = String(message.text ?? '').trim();\nconst chatId = String(message.chat?.id ?? '').trim();\nconst messageId = String(message.message_id ?? '').trim();\nif (!chatId) throw new Error('Telegram chat ID is missing');\nconst cleaned = text.replace(/^\\/submit(?:@\\w+)?\\s*/i, '').trim();\nconst urlMatch = cleaned.match(/https?:\\/\\/[^\\s<>]+/i);\nif (!urlMatch) return [{ json: { valid: false, chatId, messageId, help: 'Send: Title | https://example.com/post\\nOr use three lines: title, URL, optional notes.' } }];\nconst url = urlMatch[0].replace(/[),.;]+$/, '');\nconst before = cleaned.slice(0, urlMatch.index).trim().replace(/[|\\n:-]+$/g, '').trim();\nconst after = cleaned.slice((urlMatch.index ?? 0) + urlMatch[0].length).trim().replace(/^[|\\n:-]+/g, '').trim();\nconst title = before || after.split(/\\r?\\n/)[0]?.trim() || '';\nconst notes = before ? after : after.split(/\\r?\\n/).slice(1).join('\\n').trim();\nif (!title) return [{ json: { valid: false, chatId, messageId, help: 'A title is required. Send: Title | https://example.com/post' } }];\nreturn [{ json: { valid: true, chatId, messageId, title: title.slice(0, 240), url, notes: notes.slice(0, 5000) } }];"
+      },
+      "id": "parse-message",
+      "name": "Parse Title and URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-470, 0]
+    },
+    {
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "typeValidation": "strict", "version": 2 }, "conditions": [{ "id": "valid-message", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }], "combinator": "and" },
+        "options": {}
+      },
+      "id": "valid-message",
+      "name": "Valid Message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-240, 0]
+    },
+    {
+      "parameters": { "chatId": "={{ $json.chatId }}", "text": "=✅ Received: {{ $json.title }}\n\nGenerating the review draft now. I will notify you when it is ready.", "additionalFields": { "appendAttribution": false } },
+      "id": "acknowledge",
+      "name": "Acknowledge Submission",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [0, -100]
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "method": "POST",
+        "url": "https://work.netfintax.com/api/content/telegram",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ title: $('Parse Title and URL').item.json.title, url: $('Parse Title and URL').item.json.url, notes: $('Parse Title and URL').item.json.notes, chatId: $('Parse Title and URL').item.json.chatId, messageId: $('Parse Title and URL').item.json.messageId }) }}",
+        "options": { "timeout": 600000 }
+      },
+      "id": "submit-content",
+      "name": "Submit to Netfintax",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [230, -100],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": { "chatId": "={{ $('Parse Title and URL').item.json.chatId }}", "text": "={{ $json.data?.status === 'pending_review' ? '🎉 Draft ready for review\\n\\nTitle: ' + $('Parse Title and URL').item.json.title + '\\nReview: https://work.netfintax.com/queue' : '❌ Could not generate the draft. ' + ($json.error || $json.message || 'Please try again.') }}", "additionalFields": { "appendAttribution": false } },
+      "id": "return-result",
+      "name": "Send Result",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [470, -100]
+    },
+    {
+      "parameters": { "chatId": "={{ $json.chatId }}", "text": "={{ '⚠️ ' + $json.help }}", "additionalFields": { "appendAttribution": false } },
+      "id": "send-help",
+      "name": "Send Format Help",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [0, 120]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Receive Telegram Message": { "main": [[{ "node": "Parse Title and URL", "type": "main", "index": 0 }]] },
+    "Parse Title and URL": { "main": [[{ "node": "Valid Message?", "type": "main", "index": 0 }]] },
+    "Valid Message?": { "main": [[{ "node": "Acknowledge Submission", "type": "main", "index": 0 }], [{ "node": "Send Format Help", "type": "main", "index": 0 }]] },
+    "Acknowledge Submission": { "main": [[{ "node": "Submit to Netfintax", "type": "main", "index": 0 }]] },
+    "Submit to Netfintax": { "main": [[{ "node": "Send Result", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": []
+}
