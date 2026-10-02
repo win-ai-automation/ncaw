@@ -713,7 +713,7 @@ function ReviewQueuePanel() {
   const [scheduleMode, setScheduleMode] = useState<'now' | 'scheduled'>('now')
   const [scheduleDate, setScheduleDate] = useState('')
   const [configLoading, setConfigLoading] = useState(false)
-  const [outputView, setOutputView] = useState<DraftOutputView>('caseStudy')
+  const [outputView, setOutputView] = useState<DraftOutputView>('facebook')
   const [compareOpen, setCompareOpen] = useState(false)
   const [compareFrom, setCompareFrom] = useState<number | null>(null)
   const [compareTo, setCompareTo] = useState<number | null>(null)
@@ -738,7 +738,7 @@ function ReviewQueuePanel() {
     setEditorDraft(selectedItem?.latest_version?.editor_content || '')
     setSelectedVersion(selectedItem?.latest_version?.version_number ?? null)
     setChangeNote('')
-    setOutputView('caseStudy')
+    setOutputView('facebook')
   }, [selectedId, selectedItem?.latest_version?.id])
 
   async function saveDraft() {
@@ -807,7 +807,7 @@ function ReviewQueuePanel() {
       const response = await fetch('/api/content', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: item.id, action, comment: revisionNote, draft: editorDraft, changeNote, accountIds: action === 'approve' ? selectedAccountIds : undefined, scheduleDate: action === 'approve' && scheduleMode === 'scheduled' ? new Date(scheduleDate).toISOString() : undefined }),
+        body: JSON.stringify({ id: item.id, action, comment: revisionNote, draft: editorDraft, publishDraft: action === 'approve' ? displayedOutput : undefined, outputType: action === 'approve' ? outputView : undefined, changeNote, accountIds: action === 'approve' ? selectedAccountIds : undefined, scheduleDate: action === 'approve' && scheduleMode === 'scheduled' ? new Date(scheduleDate).toISOString() : undefined }),
       })
       const payload = await response.json() as { data?: QueueContent; error?: string; message?: string; warning?: string }
       if (!response.ok) throw new Error(payload.error || 'Unable to update this content.')

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import type { Database, Json } from '@/lib/supabase/database.types'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { createClient as createAdminClient, type SupabaseClient } from '@supabase/supabase-js'
 import { generateSocialImage } from '@/lib/social-image'
 
 type WorkflowResult = {
@@ -267,11 +267,13 @@ export async function PATCH(request: Request) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const body = await request.json().catch(() => null) as { id?: unknown; action?: unknown; comment?: unknown; draft?: unknown; changeNote?: unknown; accountIds?: unknown; scheduleDate?: unknown } | null
+  const body = await request.json().catch(() => null) as { id?: unknown; action?: unknown; comment?: unknown; draft?: unknown; publishDraft?: unknown; outputType?: unknown; changeNote?: unknown; accountIds?: unknown; scheduleDate?: unknown } | null
   const id = typeof body?.id === 'string' ? body.id : ''
   const action = body?.action === 'approve' || body?.action === 'request_revision' || body?.action === 'save_draft' ? body.action : null
   const comment = typeof body?.comment === 'string' ? body.comment.trim().slice(0, 5000) : ''
   const draft = typeof body?.draft === 'string' ? body.draft.trim() : ''
+  const publishDraft = typeof body?.publishDraft === 'string' ? body.publishDraft.trim() : ''
+  const outputType = typeof body?.outputType === 'string' ? body.outputType.trim().slice(0, 40) : ''
   const changeNote = typeof body?.changeNote === 'string' ? body.changeNote.trim().slice(0, 1000) : ''
   const requestedAccountIds = Array.isArray(body?.accountIds) ? body.accountIds.filter((value): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean) : []
   const scheduleDate = typeof body?.scheduleDate === 'string' ? body.scheduleDate.trim() : ''
@@ -353,8 +355,12 @@ export async function PATCH(request: Request) {
   }
 
   let socialImage: { url: string; mimeType: string } | null = null
+  let mediaPreparationError = ''
   try {
-    const { data: imageAsset } = await supabase
+    const assetClient = process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SECRET_KEY
+      ? createAdminClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
+      : supabase
+    const { data: imageAsset, error: imageAssetError } = await assetClient
       .from('content_assets')
       .select('storage_path,mime_type')
       .eq('version_id', version.id)
@@ -362,27 +368,49 @@ export async function PATCH(request: Request) {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
+    if (imageAssetError) throw imageAssetError
     if (imageAsset?.storage_path) {
-      const { data: signedImage } = await supabase.storage.from('content-assets').createSignedUrl(imageAsset.storage_path, 3600)
+      const { data: signedImage, error: signedImageError } = await assetClient.storage.from('content-assets').createSignedUrl(imageAsset.storage_path, 3600)
+      if (signedImageError) throw signedImageError
       if (signedImage?.signedUrl) socialImage = { url: signedImage.signedUrl, mimeType: imageAsset.mime_type || 'image/jpeg' }
     }
-  } catch {
-    // Images are optional. A missing or inaccessible image must not block text publishing.
+  } catch (error) {
+    mediaPreparationError = error instanceof Error ? error.message : 'Could not prepare the social image.'
   }
+
+  if (socialImage && process.env.GHL_ACCESS_TOKEN?.trim()) {
+    try {
+      const mediaForm = new FormData()
+      mediaForm.set('hosted', 'true')
+      mediaForm.set('fileUrl', socialImage.url)
+      mediaForm.set('name', `netfintax-${data.id}-${version.version_number}.jpg`)
+      const mediaResponse = await fetch('https://services.leadconnectorhq.com/medias/upload-file', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${process.env.GHL_ACCESS_TOKEN.trim()}`, Accept: 'application/json', Version: 'v3' },
+        body: mediaForm,
+        signal: AbortSignal.timeout(60000),
+      })
+      const uploadedMedia = await mediaResponse.json().catch(() => null) as { url?: string } | null
+      if (mediaResponse.ok && uploadedMedia?.url) socialImage = { ...socialImage, url: uploadedMedia.url }
+    } catch {
+      // Fall back to the temporary signed URL when GHL media storage is unavailable.
+    }
+  }
+  await recordAudit(supabase, id, 'publish.media_prepared', { versionId: version.id, hasImage: socialImage !== null, message: mediaPreparationError || null })
 
   try {
     const publishResponse = await fetch(publishWebhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-content-secret': webhookSecret },
-      body: JSON.stringify({ contentId: data.id, title: data.title, platform: data.platform, sourceUrl: data.source_url, versionId: version.id, versionNumber: version.version_number, draft: version.editor_content, generatedPayload: version.generated_payload, imageUrl: socialImage?.url || null, imageMimeType: socialImage?.mimeType || null, locationId, userId, accountIds, scheduleDate: normalizedScheduleDate || null }),
+      body: JSON.stringify({ contentId: data.id, title: data.title, platform: data.platform, sourceUrl: data.source_url, versionId: version.id, versionNumber: version.version_number, draft: publishDraft || version.editor_content, outputType: outputType || 'caseStudy', generatedPayload: version.generated_payload, imageUrl: socialImage?.url || null, imageMimeType: socialImage?.mimeType || null, locationId, userId, accountIds, scheduleDate: normalizedScheduleDate || null }),
       signal: AbortSignal.timeout(125000),
     })
-    const publishResult = await publishResponse.json().catch(() => null) as { status?: string; externalId?: string; publishedAt?: string; message?: string } | null
+    const publishResult = await publishResponse.json().catch(() => null) as { status?: string; externalId?: string; publishedAt?: string; message?: string; mediaAttached?: boolean } | null
     if (!publishResponse.ok) throw new Error(publishResult?.message || `n8n returned ${publishResponse.status}`)
     const publishStatus = publishResult?.status === 'published' ? 'published' : publishResult?.status === 'scheduled' ? 'scheduled' : 'approved'
     const { data: publishedItem, error: publishUpdateError } = await supabase.from('content_items').update({ status: publishStatus, external_job_id: publishResult?.externalId || configuredItem.external_job_id, scheduled_at: publishStatus === 'scheduled' ? normalizedScheduleDate : null, published_at: publishStatus === 'published' ? publishResult?.publishedAt || new Date().toISOString() : null }).eq('id', id).select().single()
     if (publishUpdateError) throw publishUpdateError
-    await recordAudit(supabase, id, publishStatus === 'scheduled' ? 'publish.scheduled' : publishStatus === 'published' ? 'publish.completed' : 'publish.sent', { externalId: publishResult?.externalId || null, accountIds, scheduledAt: normalizedScheduleDate || null })
+    await recordAudit(supabase, id, publishStatus === 'scheduled' ? 'publish.scheduled' : publishStatus === 'published' ? 'publish.completed' : 'publish.sent', { externalId: publishResult?.externalId || null, accountIds, scheduledAt: normalizedScheduleDate || null, outputType: outputType || 'caseStudy', mediaAttached: publishResult?.mediaAttached === true })
     return NextResponse.json({ data: publishedItem, message: publishResult?.message || (publishStatus === 'published' ? 'Content approved and published successfully.' : 'Content approved and sent to publishing.') })
   } catch (publishError) {
     await recordAudit(supabase, id, 'publish.failed', { message: publishError instanceof Error ? publishError.message : 'Unknown publishing error', accountIds, scheduledAt: normalizedScheduleDate || null })
