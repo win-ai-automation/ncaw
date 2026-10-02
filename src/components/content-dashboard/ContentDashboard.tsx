@@ -93,6 +93,50 @@ type SocialAccount = { id: string; name: string; platform: string }
 type ContentAsset = { id: string; version_id: string; asset_type: string; storage_path: string; mime_type: string; created_at: string; url: string | null }
 type DraftOutputView = 'caseStudy' | 'accuracyReview' | 'facebook' | 'linkedin' | 'threads' | 'instagram' | 'email' | 'complianceNotes'
 
+type FacebookCaptureResult = {
+  ok: boolean
+  mediaUrl?: string
+  caption?: string
+  canonicalUrl?: string
+  error?: string
+}
+
+function facebookHelperAvailable(timeoutMs = 700) {
+  return new Promise<boolean>((resolve) => {
+    const requestId = crypto.randomUUID()
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener('message', onMessage)
+      resolve(false)
+    }, timeoutMs)
+    function onMessage(event: MessageEvent) {
+      if (event.source !== window || event.data?.source !== 'netfintax-facebook-helper' || event.data?.type !== 'READY' || event.data?.requestId !== requestId) return
+      window.clearTimeout(timeout)
+      window.removeEventListener('message', onMessage)
+      resolve(true)
+    }
+    window.addEventListener('message', onMessage)
+    window.postMessage({ source: 'netfintax-content-desk', type: 'PING', requestId }, window.location.origin)
+  })
+}
+
+function captureFacebookSource(url: string, timeoutMs = 30000) {
+  return new Promise<FacebookCaptureResult>((resolve) => {
+    const requestId = crypto.randomUUID()
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener('message', onMessage)
+      resolve({ ok: false, error: 'Facebook helper timed out. Apify will be used instead.' })
+    }, timeoutMs)
+    function onMessage(event: MessageEvent) {
+      if (event.source !== window || event.data?.source !== 'netfintax-facebook-helper' || event.data?.requestId !== requestId) return
+      window.clearTimeout(timeout)
+      window.removeEventListener('message', onMessage)
+      resolve(event.data.result as FacebookCaptureResult)
+    }
+    window.addEventListener('message', onMessage)
+    window.postMessage({ source: 'netfintax-content-desk', type: 'CAPTURE_FACEBOOK', requestId, url }, window.location.origin)
+  })
+}
+
 function draftOutput(payload: unknown, view: DraftOutputView, fallback: string) {
   const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
   const social = root.socialPack && typeof root.socialPack === 'object' ? root.socialPack as Record<string, unknown> : {}
@@ -533,10 +577,25 @@ function ContentIntakePanel() {
     setProgress(8)
     setProgressMessage('Starting the n8n workflow...')
     try {
+      let mediaUrl = ''
+      let capturedContent = ''
+      let canonicalUrl = ''
+      if (/^https?:\/\/(?:[^/]+\.)?(?:facebook\.com|fb\.watch)\//i.test(url.trim())) {
+        if (await facebookHelperAvailable()) {
+          setProgress(16)
+          setProgressMessage('Checking Facebook through your signed-in browser...')
+          const capture = await captureFacebookSource(url.trim())
+          if (capture.ok) {
+            mediaUrl = capture.mediaUrl?.trim() ?? ''
+            capturedContent = capture.caption?.trim().slice(0, 100000) ?? ''
+            canonicalUrl = capture.canonicalUrl?.trim() ?? ''
+          }
+        }
+      }
       const response = await fetch('/api/content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, url, content, notes }),
+        body: JSON.stringify({ title, url, content, notes, mediaUrl, capturedContent, canonicalUrl }),
       })
       const payload = await response.json() as { data?: { id: string }; error?: string; warning?: string; workflow?: { message?: string; status?: string } }
       if (!response.ok) throw new Error(payload.error || 'Unable to submit content.')

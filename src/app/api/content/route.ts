@@ -13,6 +13,43 @@ type WorkflowResult = {
   draft?: Record<string, unknown>
 }
 
+const MAX_SOURCE_MEDIA_BYTES = 24 * 1024 * 1024
+
+function isTrustedFacebookMediaUrl(value: string) {
+  try {
+    const url = new URL(value)
+    const host = url.hostname.toLowerCase()
+    return url.protocol === 'https:' && (host === 'fbcdn.net' || host.endsWith('.fbcdn.net') || host === 'facebook.com' || host.endsWith('.facebook.com'))
+  } catch { return false }
+}
+
+async function downloadFacebookMedia(value: string) {
+  let current = value
+  for (let redirect = 0; redirect < 4; redirect += 1) {
+    if (!isTrustedFacebookMediaUrl(current)) throw new Error('Facebook media redirected to an unsupported host')
+    const response = await fetch(current, {
+      redirect: 'manual',
+      headers: { 'User-Agent': 'Mozilla/5.0 NetfintaxContentDesk/1.0' },
+      signal: AbortSignal.timeout(120000),
+    })
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location')
+      if (!location) throw new Error('Facebook media redirect had no location')
+      current = new URL(location, current).toString()
+      continue
+    }
+    if (!response.ok) throw new Error(`Facebook media returned HTTP ${response.status}`)
+    const declaredSize = Number(response.headers.get('content-length') || 0)
+    if (declaredSize > MAX_SOURCE_MEDIA_BYTES) throw new Error('Facebook video exceeds the 24 MB transcription limit')
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    if (!bytes.length || bytes.length > MAX_SOURCE_MEDIA_BYTES) throw new Error('Facebook video is empty or exceeds the 24 MB transcription limit')
+    const contentType = (response.headers.get('content-type') || 'video/mp4').split(';')[0].trim().toLowerCase()
+    if (!(contentType.startsWith('video/') || contentType.startsWith('audio/') || contentType === 'application/octet-stream')) throw new Error('Facebook returned a non-media response')
+    return { bytes, contentType: contentType === 'application/octet-stream' ? 'video/mp4' : contentType }
+  }
+  throw new Error('Facebook media redirected too many times')
+}
+
 async function saveGeneratedAssets(supabase: SupabaseClient<Database>, userId: string, contentId: string, versionId: string, versionNumber: number, payload: Record<string, unknown>) {
   const socialPack = payload.socialPack && typeof payload.socialPack === 'object' ? payload.socialPack : {}
   const files = [
@@ -76,15 +113,19 @@ export async function POST(request: Request) {
       headers: { 'Retry-After': '60' },
     })
   }
-  const body = await request.json().catch(() => null) as { title?: unknown; url?: unknown; content?: unknown; notes?: unknown } | null
+  const body = await request.json().catch(() => null) as { title?: unknown; url?: unknown; content?: unknown; notes?: unknown; mediaUrl?: unknown; capturedContent?: unknown; canonicalUrl?: unknown } | null
   const title = typeof body?.title === 'string' ? body.title.trim() : ''
   const sourceUrl = typeof body?.url === 'string' ? body.url.trim() : ''
   const rawContent = typeof body?.content === 'string' ? body.content.trim() : ''
+  const capturedContent = typeof body?.capturedContent === 'string' ? body.capturedContent.trim().slice(0, 100000) : ''
+  const canonicalUrl = typeof body?.canonicalUrl === 'string' ? body.canonicalUrl.trim() : ''
+  const suppliedMediaUrl = typeof body?.mediaUrl === 'string' ? body.mediaUrl.trim() : ''
   const notes = typeof body?.notes === 'string' ? body.notes.trim().slice(0, 5000) : null
   if (!title) return NextResponse.json({ error: 'A title is required' }, { status: 400 })
   if (title.length > 240) return NextResponse.json({ error: 'Title must be 240 characters or fewer' }, { status: 400 })
   if (!sourceUrl && !rawContent) return NextResponse.json({ error: 'A URL or content is required' }, { status: 400 })
   if (rawContent.length > 100000) return NextResponse.json({ error: 'Content must be 100,000 characters or fewer' }, { status: 400 })
+  if (suppliedMediaUrl && !isTrustedFacebookMediaUrl(suppliedMediaUrl)) return NextResponse.json({ error: 'The browser helper returned an unsupported media URL' }, { status: 400 })
   let platform = 'web'
   if (sourceUrl) {
     try {
@@ -115,6 +156,22 @@ export async function POST(request: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   await recordAudit(supabase, data.id, 'content.submitted', { platform, sourceType: sourceUrl ? 'url' : 'pasted_content' })
 
+  let workflowMediaUrl = suppliedMediaUrl
+  if (suppliedMediaUrl) {
+    try {
+      const media = await downloadFacebookMedia(suppliedMediaUrl)
+      const storagePath = `${user.id}/${data.id}/source.mp4`
+      const { error: uploadError } = await supabase.storage.from('content-source-media').upload(storagePath, media.bytes, { contentType: media.contentType, upsert: true })
+      if (uploadError) throw uploadError
+      const { data: signed, error: signedError } = await supabase.storage.from('content-source-media').createSignedUrl(storagePath, 900)
+      if (signedError || !signed?.signedUrl) throw signedError || new Error('Could not sign uploaded source media')
+      workflowMediaUrl = signed.signedUrl
+      await recordAudit(supabase, data.id, 'source_media.captured', { storagePath, byteLength: media.bytes.length })
+    } catch (captureError) {
+      await recordAudit(supabase, data.id, 'source_media.capture_failed', { message: captureError instanceof Error ? captureError.message : 'Unknown media capture error' })
+    }
+  }
+
   const webhookUrl = process.env.N8N_CONTENT_WEBHOOK_URL
   const webhookSecret = process.env.CONTENT_WEBHOOK_SECRET
   if (!webhookUrl || !webhookSecret) {
@@ -126,7 +183,7 @@ export async function POST(request: Request) {
     const workflowResponse = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-content-secret': webhookSecret },
-      body: JSON.stringify({ contentId: data.id, title, url: sourceUrl, content: rawContent, notes, apifyActorId }),
+      body: JSON.stringify({ contentId: data.id, title, url: canonicalUrl || sourceUrl, originalUrl: sourceUrl, content: rawContent || (!workflowMediaUrl ? capturedContent : ''), capturedContent, notes, apifyActorId, mediaUrl: workflowMediaUrl }),
       // Video extraction and speech-to-text can take several minutes.
       signal: AbortSignal.timeout(600000),
     })

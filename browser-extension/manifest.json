@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Netfintax Facebook Helper",
+  "version": "0.1.0",
+  "description": "Uses the current signed-in Facebook tab to resolve media for Netfintax without exporting cookies.",
+  "permissions": ["tabs"],
+  "host_permissions": [
+    "https://*.facebook.com/*",
+    "https://facebook.com/*",
+    "https://fb.watch/*",
+    "https://work.netfintax.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://work.netfintax.com/*", "http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["content-desk.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://*.facebook.com/*", "https://facebook.com/*", "https://fb.watch/*"],
+      "js": ["facebook-capture.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
