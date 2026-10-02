@@ -12,13 +12,63 @@
     },
     {
       "parameters": {
+        "jsCode": "const message = $json.message ?? {};\nconst text = String(message.text ?? '').trim();\nconst chatId = String(message.chat?.id ?? '').trim();\nconst isFormCommand = /^\\/(?:form|submit)(?:@\\w+)?\\s*$/i.test(text);\nreturn [{ json: { ...$json, chatId, isFormCommand } }];"
+      },
+      "id": "detect-form-command",
+      "name": "Detect Form Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-510, 0]
+    },
+    {
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "typeValidation": "strict", "version": 2 }, "conditions": [{ "id": "is-form-command", "leftValue": "={{ $json.isFormCommand }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }], "combinator": "and" },
+        "options": {}
+      },
+      "id": "form-command",
+      "name": "Form Command?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-320, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "Submit content\nClick the button below to open the submission form.",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "Open submission form",
+                    "additionalFields": {
+                      "web_app": { "url": "https://work.netfintax.com/telegram-submit" }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": { "appendAttribution": false }
+      },
+      "id": "send-form-button",
+      "name": "Send Form Button",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [-80, -120]
+    },
+    {
+      "parameters": {
         "jsCode": "const message = $json.message ?? {};\nconst text = String(message.text ?? '').trim();\nconst chatId = String(message.chat?.id ?? '').trim();\nconst messageId = String(message.message_id ?? '').trim();\nif (!chatId) throw new Error('Telegram chat ID is missing');\nconst cleaned = text.replace(/^\\/submit(?:@\\w+)?\\s*/i, '').trim();\nconst urlMatch = cleaned.match(/https?:\\/\\/[^\\s<>]+/i);\nif (!urlMatch) return [{ json: { valid: false, chatId, messageId, help: 'Send: Title | https://example.com/post\\nOr use three lines: title, URL, optional notes.' } }];\nconst url = urlMatch[0].replace(/[),.;]+$/, '');\nconst before = cleaned.slice(0, urlMatch.index).trim().replace(/[|\\n:-]+$/g, '').trim();\nconst after = cleaned.slice((urlMatch.index ?? 0) + urlMatch[0].length).trim().replace(/^[|\\n:-]+/g, '').trim();\nconst title = before || after.split(/\\r?\\n/)[0]?.trim() || '';\nconst notes = before ? after : after.split(/\\r?\\n/).slice(1).join('\\n').trim();\nif (!title) return [{ json: { valid: false, chatId, messageId, help: 'A title is required. Send: Title | https://example.com/post' } }];\nreturn [{ json: { valid: true, chatId, messageId, title: title.slice(0, 240), url, notes: notes.slice(0, 5000) } }];"
       },
       "id": "parse-message",
       "name": "Parse Title and URL",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-470, 0]
+      "position": [-80, 100]
     },
     {
       "parameters": {
@@ -77,7 +127,9 @@
   ],
   "pinData": {},
   "connections": {
-    "Receive Telegram Message": { "main": [[{ "node": "Parse Title and URL", "type": "main", "index": 0 }]] },
+    "Receive Telegram Message": { "main": [[{ "node": "Detect Form Command", "type": "main", "index": 0 }]] },
+    "Detect Form Command": { "main": [[{ "node": "Form Command?", "type": "main", "index": 0 }]] },
+    "Form Command?": { "main": [[{ "node": "Send Form Button", "type": "main", "index": 0 }], [{ "node": "Parse Title and URL", "type": "main", "index": 0 }]] },
     "Parse Title and URL": { "main": [[{ "node": "Valid Message?", "type": "main", "index": 0 }]] },
     "Valid Message?": { "main": [[{ "node": "Acknowledge Submission", "type": "main", "index": 0 }], [{ "node": "Send Format Help", "type": "main", "index": 0 }]] },
     "Acknowledge Submission": { "main": [[{ "node": "Submit to Netfintax", "type": "main", "index": 0 }]] },
