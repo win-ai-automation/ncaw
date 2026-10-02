@@ -237,6 +237,22 @@ main{grid-column:2;min-width:0}.topbar{position:fixed;inset:0 0 auto 232px;z-ind
 .queue-pagination button svg{width:15px;height:15px}
 .queue-pagination span{color:#627d98;font-size:11px}
 .queue-pagination strong{color:var(--navy)}
+.shared-social-image-card{overflow:hidden;margin:14px 24px 0;border:1px solid #dce7f2;border-radius:11px;background:#fff}
+.shared-social-image-card>header{display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid #e6eef8;padding:10px 16px}
+.shared-social-image-card>header>div{display:flex;min-width:0;align-items:center;gap:11px;color:#527aa4}
+.shared-social-image-card>header svg{width:20px;height:20px;flex:0 0 20px}
+.shared-social-image-card>header span{display:grid;gap:3px}
+.shared-social-image-card>header strong{color:var(--navy);font-size:13px}
+.shared-social-image-card>header small{color:#7890aa;font-size:10px}
+.shared-social-image-card>header a{display:inline-flex;min-height:34px;align-items:center;gap:7px;border:1px solid #d6e1ec;border-radius:8px;padding:0 11px;color:var(--blue);font-size:11px;font-weight:600;text-decoration:none}
+.shared-social-image-card>header a svg{width:15px;height:15px}
+.shared-social-image-actions{display:flex;align-items:center;gap:8px}.shared-social-image-actions button{display:inline-flex;min-height:34px;align-items:center;gap:7px;border:1px solid #d6e1ec;border-radius:8px;background:#fff;padding:0 11px;color:#365b7d;font:inherit;font-size:11px;font-weight:600}.shared-social-image-actions button:hover:not(:disabled){background:#f1f7fd;color:var(--blue)}.shared-social-image-actions button:disabled{cursor:wait;opacity:.55}.shared-social-image-actions button svg{width:15px;height:15px}.image-revision-modal .notice{margin-top:14px}.image-revision-modal .notice svg{width:18px;height:18px;flex:0 0 18px}
+.shared-social-image-card>img{display:block;width:100%;height:auto;aspect-ratio:1.92/1;object-fit:cover}
+.shared-social-image-empty{display:grid;min-height:230px;place-items:center;align-content:center;padding:24px;color:#7890aa;text-align:center}
+.shared-social-image-empty>svg{width:36px;height:36px;margin-bottom:10px;color:#8eb0cf}
+.shared-social-image-empty strong{color:var(--navy);font-size:14px}
+.shared-social-image-empty p{margin:5px 0 16px;font-size:11px}
+.shared-social-image-empty .primary-btn{min-height:40px}
 
 /* Review dialogs aligned with the redesigned workspace */
 .modal-wrap{padding:24px;background:rgb(15 35 55/.34);backdrop-filter:blur(5px)}
@@ -285,6 +301,7 @@ main{grid-column:2;min-width:0}.topbar{position:fixed;inset:0 0 auto 232px;z-ind
   .modal-wrap .modal-actions button{width:100%}
   .version-compare-grid{grid-template-columns:1fr}
 }
+@media(max-width:767px){.shared-social-image-card{margin-inline:16px}.shared-social-image-card>header{align-items:flex-start;flex-direction:column}.shared-social-image-actions{width:100%}.shared-social-image-actions button,.shared-social-image-card>header a{flex:1;justify-content:center}}
 
 /* The header stays visible in normal layout flow, so page content cannot slide beneath it. */
 .topbar{position:sticky;inset:auto;top:0}

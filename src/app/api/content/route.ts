@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import type { Database, Json } from '@/lib/supabase/database.types'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { generateSocialImage } from '@/lib/social-image'
 
 type WorkflowResult = {
   requestId?: string
@@ -53,7 +54,19 @@ async function downloadFacebookMedia(value: string) {
   throw new Error('Facebook media redirected too many times')
 }
 
-async function saveGeneratedAssets(supabase: SupabaseClient<Database>, userId: string, contentId: string, versionId: string, versionNumber: number, payload: Record<string, unknown>) {
+function separateFacebookHashtags(payload: Record<string, unknown>) {
+  if (!payload.socialPack || typeof payload.socialPack !== 'object' || Array.isArray(payload.socialPack)) return
+  const socialPack = payload.socialPack as Record<string, unknown>
+  if (typeof socialPack.facebook !== 'string') return
+  const post = socialPack.facebook.trim()
+  const trailingHashtags = post.match(/(?:\s+#[\p{L}\p{N}_-]+){1,5}\s*$/u)?.[0]
+  if (!trailingHashtags) return
+  const hashtags = trailingHashtags.trim().replace(/\s+/g, ' ')
+  const body = post.slice(0, post.length - trailingHashtags.length).trimEnd()
+  socialPack.facebook = `${body}\n\n${hashtags}`
+}
+
+async function saveGeneratedAssets(supabase: SupabaseClient<Database>, userId: string, contentId: string, versionId: string, versionNumber: number, title: string, payload: Record<string, unknown>) {
   const socialPack = payload.socialPack && typeof payload.socialPack === 'object' ? payload.socialPack : {}
   const files = [
     { type: 'case_study_markdown' as const, name: 'case-study.md', mime: 'text/markdown', value: payload.caseStudyMarkdown },
@@ -73,6 +86,12 @@ async function saveGeneratedAssets(supabase: SupabaseClient<Database>, userId: s
     const { error } = await supabase.from('content_assets').insert(rows)
     if (error) throw error
   }
+  const image = await generateSocialImage(title, payload)
+  const imagePath = `${contentId}/v${versionNumber}/social-image.${image.extension}`
+  const { error: imageUploadError } = await supabase.storage.from('content-assets').upload(imagePath, image.bytes, { contentType: image.mimeType, upsert: true })
+  if (imageUploadError) throw imageUploadError
+  const { error: imageRowError } = await supabase.from('content_assets').insert({ content_id: contentId, version_id: versionId, asset_type: 'social_image', storage_path: imagePath, mime_type: image.mimeType, created_by: userId })
+  if (imageRowError) throw imageRowError
 }
 
 async function recordAudit(supabase: SupabaseClient<Database>, contentId: string | null, action: string, metadata: Record<string, Json | undefined> = {}) {
@@ -195,6 +214,7 @@ export async function POST(request: Request) {
     if (!workflowResponse.ok || !workflow?.draft) {
       throw new Error(`n8n returned ${workflowResponse.status}${workflowResponse.statusText ? ` ${workflowResponse.statusText}` : ''}`)
     }
+    separateFacebookHashtags(workflow.draft)
 
     const draftText = typeof workflow.draft.caseStudyMarkdown === 'string'
       ? workflow.draft.caseStudyMarkdown
@@ -213,7 +233,7 @@ export async function POST(request: Request) {
     }).select().single()
     if (versionError) throw versionError
     let assetWarning = ''
-    try { await saveGeneratedAssets(supabase, user.id, data.id, createdVersion.id, createdVersion.version_number, workflow.draft) }
+    try { await saveGeneratedAssets(supabase, user.id, data.id, createdVersion.id, createdVersion.version_number, title, workflow.draft) }
     catch (assetError) { assetWarning = assetError instanceof Error ? assetError.message : 'Generated assets could not be saved.' }
     const { data: updated, error: updateError } = await supabase.from('content_items').update({
       status: 'pending_review',
@@ -278,7 +298,8 @@ export async function PATCH(request: Request) {
     }).select().single()
     if (saveError) return NextResponse.json({ error: saveError.message }, { status: 500 })
     version = savedVersion
-    try { await saveGeneratedAssets(supabase, user.id, id, savedVersion.id, savedVersion.version_number, updatedPayload as Record<string, unknown>) }
+    const { data: contentForAssets } = await supabase.from('content_items').select('title').eq('id', id).maybeSingle()
+    try { await saveGeneratedAssets(supabase, user.id, id, savedVersion.id, savedVersion.version_number, contentForAssets?.title || 'Netfintax social content', updatedPayload as Record<string, unknown>) }
     catch { /* Asset storage must not prevent editorial work. */ }
     await recordAudit(supabase, id, 'draft.version_created', { versionId: savedVersion.id, versionNumber: savedVersion.version_number, changeNote: changeNote || null })
   }
@@ -331,11 +352,29 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ data: configuredItem, message: 'Content approved successfully.', warning: 'Publishing is not configured yet. The content remains approved.' })
   }
 
+  let socialImage: { url: string; mimeType: string } | null = null
+  try {
+    const { data: imageAsset } = await supabase
+      .from('content_assets')
+      .select('storage_path,mime_type')
+      .eq('version_id', version.id)
+      .eq('asset_type', 'social_image')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (imageAsset?.storage_path) {
+      const { data: signedImage } = await supabase.storage.from('content-assets').createSignedUrl(imageAsset.storage_path, 3600)
+      if (signedImage?.signedUrl) socialImage = { url: signedImage.signedUrl, mimeType: imageAsset.mime_type || 'image/jpeg' }
+    }
+  } catch {
+    // Images are optional. A missing or inaccessible image must not block text publishing.
+  }
+
   try {
     const publishResponse = await fetch(publishWebhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-content-secret': webhookSecret },
-      body: JSON.stringify({ contentId: data.id, title: data.title, platform: data.platform, sourceUrl: data.source_url, versionId: version.id, versionNumber: version.version_number, draft: version.editor_content, generatedPayload: version.generated_payload, locationId, userId, accountIds, scheduleDate: normalizedScheduleDate || null }),
+      body: JSON.stringify({ contentId: data.id, title: data.title, platform: data.platform, sourceUrl: data.source_url, versionId: version.id, versionNumber: version.version_number, draft: version.editor_content, generatedPayload: version.generated_payload, imageUrl: socialImage?.url || null, imageMimeType: socialImage?.mimeType || null, locationId, userId, accountIds, scheduleDate: normalizedScheduleDate || null }),
       signal: AbortSignal.timeout(125000),
     })
     const publishResult = await publishResponse.json().catch(() => null) as { status?: string; externalId?: string; publishedAt?: string; message?: string } | null

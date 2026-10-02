@@ -18,6 +18,7 @@ import {
   ExternalLink,
   FileText,
   History,
+  Image as ImageIcon,
   Inbox,
   Link2,
   LoaderCircle,
@@ -146,7 +147,13 @@ function draftOutput(payload: unknown, view: DraftOutputView, fallback: string) 
   const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
   const social = root.socialPack && typeof root.socialPack === 'object' ? root.socialPack as Record<string, unknown> : {}
   const value = view === 'caseStudy' ? root.caseStudyMarkdown ?? fallback : view === 'accuracyReview' ? root.accuracyReview : view === 'complianceNotes' ? root.complianceNotes : social[view]
-  if (typeof value === 'string') return value
+  if (typeof value === 'string') {
+    if (view !== 'facebook') return value
+    const post = value.trim()
+    const trailingHashtags = post.match(/(?:\s+#[\p{L}\p{N}_-]+){1,5}\s*$/u)?.[0]
+    if (!trailingHashtags) return post
+    return `${post.slice(0, post.length - trailingHashtags.length).trimEnd()}\n\n${trailingHashtags.trim().replace(/\s+/g, ' ')}`
+  }
   if (view === 'facebook' && value == null && typeof social.linkedin === 'string') return social.linkedin
   if (view === 'instagram' && Array.isArray(value)) {
     return value.map((item, index) => {
@@ -714,6 +721,10 @@ function ReviewQueuePanel() {
   const [verificationOpen, setVerificationOpen] = useState(false)
   const [assets, setAssets] = useState<ContentAsset[]>([])
   const [assetsLoading, setAssetsLoading] = useState(false)
+  const [socialImage, setSocialImage] = useState<ContentAsset | null>(null)
+  const [imagePending, setImagePending] = useState(false)
+  const [imageRevisionOpen, setImageRevisionOpen] = useState(false)
+  const [imageInstructions, setImageInstructions] = useState('')
 
   useEffect(() => {
     if (!publishProgressOpen) return
@@ -891,6 +902,20 @@ function ReviewQueuePanel() {
   const toVersion = versions.find((entry) => entry.version_number === compareTo)
   const outputLabels: Record<DraftOutputView, string> = { caseStudy: 'Case study', accuracyReview: 'Accuracy review', facebook: 'Facebook', linkedin: 'LinkedIn', threads: 'Threads / X', instagram: 'Instagram', email: 'Email', complianceNotes: 'Compliance' }
 
+  useEffect(() => {
+    if (!active?.id || !viewedVersion?.id) { setSocialImage(null); return }
+    const controller = new AbortController()
+    setSocialImage(null)
+    fetch(`/api/content/assets?contentId=${encodeURIComponent(active.id)}`, { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => response.ok ? response.json() as Promise<{ data?: ContentAsset[] }> : { data: [] })
+      .then((payload) => {
+        const image = (payload.data ?? []).find((asset) => asset.version_id === viewedVersion.id && asset.asset_type === 'social_image')
+        setSocialImage(image ?? null)
+      })
+      .catch((caught) => { if ((caught as Error).name !== 'AbortError') setSocialImage(null) })
+    return () => controller.abort()
+  }, [active?.id, viewedVersion?.id])
+
   if (loading) return <DashboardPageSkeleton />
 
   function selectQueuePage(nextPage: number) {
@@ -922,6 +947,28 @@ function ReviewQueuePanel() {
       setActionMessage(caught instanceof Error ? caught.message : 'Unable to load generated files.')
       setAssetsOpen(false)
     } finally { setAssetsLoading(false) }
+  }
+
+  async function createSharedSocialImage(regenerate = false) {
+    if (!active?.id || !viewedVersion?.id || imagePending) return
+    setImagePending(true)
+    setActionMessage('')
+    try {
+      const response = await fetch('/api/content/assets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contentId: active.id, versionId: viewedVersion.id, regenerate, instructions: regenerate ? imageInstructions : '' }),
+      })
+      const payload = await response.json() as { data?: ContentAsset; error?: string }
+      if (!response.ok || !payload.data) throw new Error(payload.error || 'Could not generate the shared social image.')
+      setSocialImage(payload.data)
+      setAssets((current) => [payload.data!, ...current.filter((asset) => asset.id !== payload.data!.id)])
+      setActionMessage(regenerate ? 'Shared social image regenerated successfully.' : 'Shared social image generated successfully.')
+      setImageRevisionOpen(false)
+      setImageInstructions('')
+    } catch (caught) {
+      setActionMessage(caught instanceof Error ? caught.message : 'Could not generate the shared social image.')
+    } finally { setImagePending(false) }
   }
 
   return <section className="live-queue-page">
@@ -991,17 +1038,28 @@ function ReviewQueuePanel() {
           <section><header><strong>Original content</strong><span>{active.raw_content?.length ?? 0} characters</span></header><div className="review-copy">{active.raw_content || 'The original content will be extracted from the source URL.'}</div></section>
           <section className="draft-editor-card"><header><strong>NetFintax output</strong><div className="draft-output-selectors"><select aria-label="Select AI output" value={outputView} onChange={(event) => setOutputView(event.target.value as DraftOutputView)}><option value="caseStudy">Case study</option><option value="accuracyReview">Accuracy review</option><option value="facebook">Facebook</option><option value="linkedin">LinkedIn</option><option value="threads">Threads / X</option><option value="instagram">Instagram</option><option value="email">Email</option><option value="complianceNotes">Compliance</option></select>{versions.length > 0 ? <select aria-label="Select draft version" value={selectedVersion ?? ''} onChange={(event) => { const version = versions.find((entry) => entry.version_number === Number(event.target.value)); if (version) { setSelectedVersion(version.version_number); setEditorDraft(version.editor_content || '') } }}>{versions.map((version) => <option key={version.id} value={version.version_number}>Version {version.version_number}</option>)}</select> : <span>Not ready</span>}{versions.length > 1 && <button type="button" className="draft-compare-btn" onClick={openVersionCompare}><History />Compare</button>}</div></header><textarea className={!displayedOutput ? 'empty' : ''} value={displayedOutput} onChange={(event) => outputView === 'caseStudy' && setEditorDraft(event.target.value)} readOnly={outputView !== 'caseStudy'} disabled={!active.latest_version || (outputView === 'caseStudy' && ['published', 'scheduled'].includes(active.status))} placeholder={active.status === 'processing' || active.status === 'received' ? 'The AI output is still being generated.' : `No ${outputView} output is available in this version.`} /></section>
         </div>
+        <section className="shared-social-image-card">
+          <header><div><ImageIcon /><span><strong>Shared social image</strong><small>One image for Facebook, LinkedIn, Instagram, and Threads</small></span></div>{socialImage?.url && <div className="shared-social-image-actions"><button type="button" disabled={imagePending} onClick={() => setImageRevisionOpen(true)}><RotateCcw />Regenerate</button><a href={socialImage.url} target="_blank" rel="noreferrer"><Download />Download</a></div>}</header>
+          {socialImage?.url ? <img src={socialImage.url} alt={`Generated social artwork for ${active.title}`} /> : <div className="shared-social-image-empty"><ImageIcon /><strong>No shared image yet</strong><p>Generate one reusable landscape visual for every social platform.</p><button type="button" className="primary-btn" disabled={imagePending || !viewedVersion} onClick={() => createSharedSocialImage()}>{imagePending ? <><LoaderCircle className="submit-spinner" />Generating image...</> : 'Generate shared image'}</button></div>}
+        </section>
         <label className="draft-change-note"><PencilLine /><input value={changeNote} onChange={(event) => setChangeNote(event.target.value)} maxLength={1000} disabled={!active.latest_version || ['published', 'scheduled'].includes(active.status)} placeholder="Describe your edit (optional)..." /></label>
         <footer className="live-review-actions"><button className="request-revision-btn" disabled={!active.latest_version || actionPending || active.status === 'published'} onClick={() => { setRevisionOpen(true); setActionMessage('') }}><MessageSquareText />Request revision</button><button className="secondary-btn save-draft-btn" disabled={!active.latest_version || actionPending || !editorDraft.trim() || editorDraft.trim() === (active.latest_version.editor_content || '').trim() || ['published', 'scheduled'].includes(active.status)} onClick={saveDraft}><FileText />{actionPending ? 'Saving...' : 'Save draft'}</button><button className="approve-review-btn" disabled={!active.latest_version || actionPending || ['approved', 'scheduled', 'published'].includes(active.status)} onClick={openPublishOptions}><Check />{active.status === 'published' ? 'Published' : active.status === 'scheduled' ? 'Scheduled' : active.status === 'approved' ? 'Approved' : 'Approve content'}</button></footer>
       </article>}
     </div>}
     {publishOptionsOpen && <div className="modal-wrap">
       <form className="modal publish-options-modal" onSubmit={(event) => { event.preventDefault(); reviewItem('approve') }}>
-        <div className="modal-icon"><Send /></div><button type="button" className="icon-btn modal-close" onClick={() => setPublishOptionsOpen(false)}><X /></button>
+        {/* <div className="modal-icon"><Send /></div><button type="button" className="icon-btn modal-close" onClick={() => setPublishOptionsOpen(false)}><X /></button> */}
         <h2>Approve and publish</h2><p className="modal-copy">Choose where and when this approved version will be published.</p>
         <fieldset><legend>Social accounts</legend>{configLoading ? <p>Loading accounts...</p> : socialAccounts.length === 0 ? <p>No publishing accounts are configured.</p> : socialAccounts.map((account) => <label className="publish-account" key={account.id}><input type="checkbox" checked={selectedAccountIds.includes(account.id)} onChange={(event) => setSelectedAccountIds((current) => event.target.checked ? [...current, account.id] : current.filter((id) => id !== account.id))} /><span><strong>{account.name}</strong><small>{account.platform}</small></span></label>)}</fieldset>
         <fieldset><legend>Publishing time</legend><label className="publish-radio"><input type="radio" name="schedule-mode" checked={scheduleMode === 'now'} onChange={() => setScheduleMode('now')} />Publish now</label><label className="publish-radio"><input type="radio" name="schedule-mode" checked={scheduleMode === 'scheduled'} onChange={() => setScheduleMode('scheduled')} />Schedule for later</label>{scheduleMode === 'scheduled' && <input className="publish-datetime" type="datetime-local" required value={scheduleDate} min={new Date(Date.now() + 120000).toISOString().slice(0, 16)} onChange={(event) => setScheduleDate(event.target.value)} />}</fieldset>
         <div className="modal-actions"><button type="button" className="secondary-btn" disabled={actionPending} onClick={() => setPublishOptionsOpen(false)}>Cancel</button><button className="primary-btn" disabled={actionPending || configLoading || selectedAccountIds.length === 0 || (scheduleMode === 'scheduled' && !scheduleDate)}>{actionPending ? 'Publishing...' : scheduleMode === 'scheduled' ? 'Approve & schedule' : 'Approve & publish'}</button></div>
+      </form>
+    </div>}
+    {imageRevisionOpen && <div className="modal-wrap">
+      <form className="modal image-revision-modal" onSubmit={(event) => { event.preventDefault(); createSharedSocialImage(true) }}>
+        <h2>Regenerate social image</h2><p className="modal-copy">Add details about the visual changes you want. The new image will replace the current shared image.</p>
+        <label>Additional instructions <small>{imageInstructions.length}/2000</small><textarea autoFocus maxLength={2000} value={imageInstructions} onChange={(event) => setImageInstructions(event.target.value)} placeholder="For example: use an illustrated style, feature a small-business owner, reduce text, use warmer colors..." /></label>
+        <div className="modal-actions"><button type="button" className="secondary-btn" disabled={imagePending} onClick={() => setImageRevisionOpen(false)}>Cancel</button><button className="primary-btn" disabled={imagePending || !imageInstructions.trim()}>{imagePending ? <><LoaderCircle className="submit-spinner" />Generating...</> : 'Regenerate image'}</button></div>
       </form>
     </div>}
     {compareOpen && <div className="modal-wrap">
