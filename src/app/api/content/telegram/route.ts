@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { Database, Json } from '@/lib/supabase/database.types'
 import { generateSocialImage } from '@/lib/social-image'
 
@@ -9,6 +10,22 @@ type WorkflowResult = {
   piiRedactions?: number
   sourceContent?: string
   draft?: Record<string, unknown>
+}
+
+function verifyTelegramInitData(initData: string) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim()
+  if (!botToken || !initData) return false
+  const params = new URLSearchParams(initData)
+  const suppliedHash = params.get('hash')
+  const authDate = Number(params.get('auth_date'))
+  if (!suppliedHash || !Number.isFinite(authDate) || Math.abs(Date.now() / 1000 - authDate) > 3600) return false
+  params.delete('hash')
+  const dataCheckString = [...params.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${key}=${value}`).join('\n')
+  const secretKey = createHmac('sha256', 'WebAppData').update(botToken).digest()
+  const expectedHash = createHmac('sha256', secretKey).update(dataCheckString).digest()
+  let receivedHash: Buffer
+  try { receivedHash = Buffer.from(suppliedHash, 'hex') } catch { return false }
+  return receivedHash.length === expectedHash.length && timingSafeEqual(receivedHash, expectedHash)
 }
 
 function platformForUrl(sourceUrl: string) {
@@ -57,9 +74,10 @@ async function saveAssets(supabase: ReturnType<typeof createClient<Database>>, u
 export async function POST(request: Request) {
   const expectedSecret = process.env.TELEGRAM_INGEST_SECRET?.trim()
   const suppliedSecret = request.headers.get('x-telegram-secret')?.trim()
-  if (!expectedSecret || suppliedSecret !== expectedSecret) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const body = await request.json().catch(() => null) as { title?: unknown; url?: unknown; notes?: unknown; chatId?: unknown; messageId?: unknown } | null
+  const body = await request.json().catch(() => null) as { title?: unknown; url?: unknown; notes?: unknown; chatId?: unknown; messageId?: unknown; initData?: unknown } | null
+  const initData = typeof body?.initData === 'string' ? body.initData : ''
+  const authorizedBySecret = Boolean(expectedSecret && suppliedSecret === expectedSecret)
+  if (!authorizedBySecret && !verifyTelegramInitData(initData)) return NextResponse.json({ error: 'Telegram verification failed. Open the form from the bot and try again.' }, { status: 401 })
   const title = typeof body?.title === 'string' ? body.title.trim() : ''
   const sourceUrl = typeof body?.url === 'string' ? body.url.trim() : ''
   const notes = typeof body?.notes === 'string' ? body.notes.trim().slice(0, 5000) : ''

@@ -67,7 +67,7 @@
       "position": [470, -100]
     },
     {
-      "parameters": { "chatId": "={{ $json.chatId }}", "text": "={{ '⚠️ ' + $json.help }}", "additionalFields": { "appendAttribution": false } },
+      "parameters": { "chatId": "={{ $json.chatId }}", "text": "={{ '📝 Open the submission form:\nhttps://work.netfintax.com/telegram-submit\n\n' + $json.help }}", "additionalFields": { "appendAttribution": false } },
       "id": "send-help",
       "name": "Send Format Help",
       "type": "n8n-nodes-base.telegram",
