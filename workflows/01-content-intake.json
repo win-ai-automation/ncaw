@@ -477,6 +477,34 @@
         -80,
         -100
       ]
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "url": "={{ $json.mediaUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "a836a34a-1df6-4e36-bb3c-bc3204a49eef",
+      "name": "Download Apify Video Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        650,
+        120
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
     }
   ],
   "pinData": {},
@@ -565,7 +593,7 @@
       "main": [
         [
           {
-            "node": "Download Video Media",
+            "node": "Download Apify Video Media",
             "type": "main",
             "index": 0
           }
@@ -708,6 +736,17 @@
         [
           {
             "node": "Download Video Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Apify Video Media": {
+      "main": [
+        [
+          {
+            "node": "Transcribe Video Audio",
             "type": "main",
             "index": 0
           }

@@ -93,6 +93,29 @@ if (!workflow.nodes.some((item) => item.name === 'Media Supplied?')) {
   })
 }
 
+if (!workflow.nodes.some((item) => item.name === 'Download Apify Video Media')) {
+  workflow.nodes.push({
+    parameters: {
+      authentication: 'genericCredentialType',
+      genericAuthType: 'httpHeaderAuth',
+      url: '={{ $json.mediaUrl }}',
+      options: {
+        response: { response: { responseFormat: 'file', outputPropertyName: 'data' } },
+        timeout: 120000,
+      },
+    },
+    id: 'a836a34a-1df6-4e36-bb3c-bc3204a49eef',
+    name: 'Download Apify Video Media',
+    type: 'n8n-nodes-base.httpRequest',
+    typeVersion: 4.2,
+    position: [650, 120],
+    retryOnFail: true,
+    maxTries: 2,
+    waitBetweenTries: 3000,
+    onError: 'continueRegularOutput',
+  })
+}
+
 node('Prepare Supplied Media').parameters.jsCode = "return [{ json: { ...$json, apifyContent: $json.capturedContent || '', mediaUrl: $json.suppliedMediaUrl, videoTranscriptFound: false, extractionProvider: 'browser_extension' } }];"
 
 workflow.connections['Content Supplied?'].main[1] = [{ node: 'Media Supplied?', type: 'main', index: 0 }]
@@ -101,6 +124,8 @@ workflow.connections['Media Supplied?'] = { main: [
   [{ node: 'Use Apify?', type: 'main', index: 0 }],
 ] }
 workflow.connections['Prepare Supplied Media'] = { main: [[{ node: 'Download Video Media', type: 'main', index: 0 }]] }
+workflow.connections['Needs Media Transcription?'].main[0] = [{ node: 'Download Apify Video Media', type: 'main', index: 0 }]
+workflow.connections['Download Apify Video Media'] = { main: [[{ node: 'Transcribe Video Audio', type: 'main', index: 0 }]] }
 
 fs.writeFileSync(path, `${JSON.stringify(workflow, null, 2)}\n`)
 console.log(`Updated ${path.pathname}`)
