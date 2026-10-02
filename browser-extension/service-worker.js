@@ -13,7 +13,7 @@ function sendToTab(tabId, message, attempts = 8) {
   })
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== 'CAPTURE_FACEBOOK') return false
   if (typeof message.url !== 'string' || !FACEBOOK_URL.test(message.url)) {
     sendResponse({ ok: false, error: 'Only Facebook URLs are supported.' })
@@ -21,8 +21,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   ;(async () => {
     let tabId
+    const returnTabId = sender.tab?.id
     try {
-      const tab = await chrome.tabs.create({ url: message.url, active: false })
+      // Facebook often defers video media in background tabs. Briefly activating the
+      // page lets its normal player resolve the signed CDN URL without exporting cookies.
+      const tab = await chrome.tabs.create({ url: message.url, active: true })
       tabId = tab.id
       if (!tabId) throw new Error('Could not open the Facebook page.')
       const result = await sendToTab(tabId, { type: 'EXTRACT_FACEBOOK' })
@@ -31,6 +34,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Facebook capture failed.' })
     } finally {
       if (tabId) chrome.tabs.remove(tabId).catch(() => {})
+      if (returnTabId) chrome.tabs.update(returnTabId, { active: true }).catch(() => {})
     }
   })()
   return true

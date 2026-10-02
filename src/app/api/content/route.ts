@@ -187,7 +187,7 @@ export async function POST(request: Request) {
     const workflowResponse = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-content-secret': webhookSecret },
-      body: JSON.stringify({ contentId: data.id, title, url: canonicalUrl || sourceUrl, originalUrl: sourceUrl, content: rawContent || (!workflowMediaUrl ? capturedContent : ''), capturedContent, notes, apifyActorId, mediaUrl: workflowMediaUrl }),
+      body: JSON.stringify({ contentId: data.id, title, url: canonicalUrl || sourceUrl, originalUrl: sourceUrl, content: rawContent, capturedContent, notes, apifyActorId, mediaUrl: workflowMediaUrl }),
       // Video extraction and speech-to-text can take several minutes.
       signal: AbortSignal.timeout(600000),
     })

@@ -59,6 +59,12 @@ prepareSource.parameters.jsCode = prepareSource.parameters.jsCode.replace(
 const merge = node('Merge Video Transcript')
 merge.parameters.jsCode = "let normalized;\ntry { normalized = $('Prepare Supplied Media').item.json; } catch { normalized = $('Normalize Apify Result').item.json; }\nconst transcript = typeof $json.text === 'string' ? $json.text.trim() : '';\nconst combined = [normalized.apifyContent, transcript ? `VIDEO TRANSCRIPT:\\n${transcript}` : ''].filter(Boolean).join('\\n\\n').slice(0, 100000);\nreturn [{ json: { ...normalized, apifyContent: combined, videoTranscriptFound: Boolean(transcript), extractionProvider: transcript ? `${normalized.extractionProvider}+openai_transcription` : normalized.extractionProvider } }];"
 
+const normalizeApify = node('Normalize Apify Result')
+normalizeApify.parameters.jsCode = normalizeApify.parameters.jsCode.replace(
+  "const apifyContent = [...new Set(fragments)].join('\\n\\n').slice(0, 100000);",
+  "const apifyContent = [...new Set([original.capturedContent, ...fragments].filter(Boolean))].join('\\n\\n').slice(0, 100000);",
+)
+
 if (!workflow.nodes.some((item) => item.name === 'Media Supplied?')) {
   workflow.nodes.push({
     parameters: {
