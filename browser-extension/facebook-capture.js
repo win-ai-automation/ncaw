@@ -7,7 +7,11 @@ function isUsableMediaUrl(value) {
   try {
     const url = new URL(value)
     const host = url.hostname.toLowerCase()
-    return host === 'fbcdn.net' || host.endsWith('.fbcdn.net') || host === 'facebook.com' || host.endsWith('.facebook.com')
+    if (/\.(?:jpe?g|png|gif|webp|avif)(?:$|\?)/i.test(url.pathname) || /(?:^|[?&])stp=dst-(?:jpe?g|png|webp)/i.test(url.search)) return false
+    if (host.startsWith('scontent.') || host.includes('.scontent.')) return false
+    const trustedHost = host === 'fbcdn.net' || host.endsWith('.fbcdn.net') || host === 'facebook.com' || host.endsWith('.facebook.com')
+    const looksLikeVideo = host.startsWith('video.') || host.includes('.video.') || /\.mp4(?:$|\?)/i.test(url.pathname) || /\/video\//i.test(url.pathname)
+    return trustedHost && looksLikeVideo
   } catch {
     return false
   }

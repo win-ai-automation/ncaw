@@ -19,7 +19,10 @@ function isTrustedFacebookMediaUrl(value: string) {
   try {
     const url = new URL(value)
     const host = url.hostname.toLowerCase()
-    return url.protocol === 'https:' && (host === 'fbcdn.net' || host.endsWith('.fbcdn.net') || host === 'facebook.com' || host.endsWith('.facebook.com'))
+    const trustedHost = host === 'fbcdn.net' || host.endsWith('.fbcdn.net') || host === 'facebook.com' || host.endsWith('.facebook.com')
+    const looksLikeImage = /\.(?:jpe?g|png|gif|webp|avif)$/i.test(url.pathname) || /(?:^|[?&])stp=dst-(?:jpe?g|png|webp)/i.test(url.search)
+    const looksLikeVideo = host.startsWith('video.') || host.includes('.video.') || /\.mp4$/i.test(url.pathname) || /\/video\//i.test(url.pathname)
+    return url.protocol === 'https:' && trustedHost && looksLikeVideo && !looksLikeImage
   } catch { return false }
 }
 
@@ -119,13 +122,13 @@ export async function POST(request: Request) {
   const rawContent = typeof body?.content === 'string' ? body.content.trim() : ''
   const capturedContent = typeof body?.capturedContent === 'string' ? body.capturedContent.trim().slice(0, 100000) : ''
   const canonicalUrl = typeof body?.canonicalUrl === 'string' ? body.canonicalUrl.trim() : ''
-  const suppliedMediaUrl = typeof body?.mediaUrl === 'string' ? body.mediaUrl.trim() : ''
+  const requestedMediaUrl = typeof body?.mediaUrl === 'string' ? body.mediaUrl.trim() : ''
+  const suppliedMediaUrl = requestedMediaUrl && isTrustedFacebookMediaUrl(requestedMediaUrl) ? requestedMediaUrl : ''
   const notes = typeof body?.notes === 'string' ? body.notes.trim().slice(0, 5000) : null
   if (!title) return NextResponse.json({ error: 'A title is required' }, { status: 400 })
   if (title.length > 240) return NextResponse.json({ error: 'Title must be 240 characters or fewer' }, { status: 400 })
   if (!sourceUrl && !rawContent) return NextResponse.json({ error: 'A URL or content is required' }, { status: 400 })
   if (rawContent.length > 100000) return NextResponse.json({ error: 'Content must be 100,000 characters or fewer' }, { status: 400 })
-  if (suppliedMediaUrl && !isTrustedFacebookMediaUrl(suppliedMediaUrl)) return NextResponse.json({ error: 'The browser helper returned an unsupported media URL' }, { status: 400 })
   let platform = 'web'
   if (sourceUrl) {
     try {
@@ -168,6 +171,7 @@ export async function POST(request: Request) {
       workflowMediaUrl = signed.signedUrl
       await recordAudit(supabase, data.id, 'source_media.captured', { storagePath, byteLength: media.bytes.length })
     } catch (captureError) {
+      workflowMediaUrl = ''
       await recordAudit(supabase, data.id, 'source_media.capture_failed', { message: captureError instanceof Error ? captureError.message : 'Unknown media capture error' })
     }
   }
