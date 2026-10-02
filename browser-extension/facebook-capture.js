@@ -2,6 +2,33 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function normalizeReelUrl(value) {
+  if (typeof value !== 'string' || !value) return ''
+  try {
+    const parsed = new URL(value, window.location.origin)
+    if (!/(^|\.)facebook\.com$/i.test(parsed.hostname)) return ''
+    const match = parsed.pathname.match(/^\/reel\/(\d+)(?:\/|$)/i)
+    return match ? `https://www.facebook.com/reel/${match[1]}` : ''
+  } catch {
+    return ''
+  }
+}
+
+function resolvedReelUrl() {
+  const candidates = [
+    window.location.href,
+    document.querySelector('link[rel="canonical"]')?.href,
+    document.querySelector('meta[property="og:url"]')?.content,
+  ]
+  for (const anchor of document.querySelectorAll('a[href*="/reel/"]')) candidates.push(anchor.href)
+  for (const candidate of candidates) {
+    const normalized = normalizeReelUrl(candidate)
+    if (normalized) return normalized
+  }
+  const htmlMatch = document.documentElement.innerHTML.match(/(?:https?:\\?\/\\?\/(?:www\\?\.)?facebook\\?\.com)?\\?\/reel\\?\/(\d{6,})/i)
+  return htmlMatch ? `https://www.facebook.com/reel/${htmlMatch[1]}` : ''
+}
+
 function isUsableMediaUrl(value) {
   if (typeof value !== 'string' || !value.startsWith('https://')) return false
   try {
@@ -47,14 +74,16 @@ function extractCaption() {
 }
 
 async function extractFacebook() {
-  for (let attempt = 0; attempt < 16; attempt += 1) {
+  let canonicalUrl = ''
+  for (let attempt = 0; attempt < 28; attempt += 1) {
+    canonicalUrl = resolvedReelUrl() || canonicalUrl
     const candidates = mediaCandidates()
     if (candidates.length) {
       return {
         ok: true,
         mediaUrl: candidates[0],
         caption: extractCaption(),
-        canonicalUrl: window.location.href,
+        canonicalUrl: canonicalUrl || window.location.href,
       }
     }
     const video = document.querySelector('video')
@@ -62,6 +91,15 @@ async function extractFacebook() {
     await sleep(750)
   }
   const loginRequired = Boolean(document.querySelector('input[name="email"], form[action*="login"]'))
+  if (canonicalUrl) {
+    return {
+      ok: true,
+      mediaUrl: '',
+      canonicalUrl,
+      caption: extractCaption(),
+      warning: 'The Reel URL was resolved; Apify will download the video.',
+    }
+  }
   return {
     ok: false,
     canonicalUrl: window.location.href,

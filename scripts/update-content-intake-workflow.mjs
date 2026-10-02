@@ -117,6 +117,16 @@ if (!workflow.nodes.some((item) => item.name === 'Download Apify Video Media')) 
 }
 
 node('Prepare Supplied Media').parameters.jsCode = "return [{ json: { ...$json, apifyContent: $json.capturedContent || '', mediaUrl: $json.suppliedMediaUrl, videoTranscriptFound: false, extractionProvider: 'browser_extension' } }];"
+node('Needs Media Transcription?').parameters.conditions = {
+  options: { caseSensitive: true, leftValue: '', typeValidation: 'strict', version: 2 },
+  conditions: [{
+    id: 'needs-media-transcription',
+    leftValue: "={{ $json.videoTranscriptFound !== true && typeof $json.mediaUrl === 'string' && $json.mediaUrl.trim().length > 0 }}",
+    rightValue: true,
+    operator: { type: 'boolean', operation: 'true', singleValue: true },
+  }],
+  combinator: 'and',
+}
 
 workflow.connections['Content Supplied?'].main[1] = [{ node: 'Media Supplied?', type: 'main', index: 0 }]
 workflow.connections['Media Supplied?'] = { main: [

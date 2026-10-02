@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Netfintax Facebook Helper",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Uses the current signed-in Facebook tab to resolve media for Netfintax without exporting cookies.",
   "permissions": ["tabs"],
   "host_permissions": [

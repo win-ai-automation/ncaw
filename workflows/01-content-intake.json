@@ -43,22 +43,12 @@
           },
           "conditions": [
             {
-              "id": "transcript-missing",
-              "leftValue": "={{ $json.videoTranscriptFound }}",
-              "rightValue": false,
+              "id": "needs-media-transcription",
+              "leftValue": "={{ $json.videoTranscriptFound !== true && typeof $json.mediaUrl === 'string' && $json.mediaUrl.trim().length > 0 }}",
+              "rightValue": true,
               "operator": {
                 "type": "boolean",
-                "operation": "false",
-                "singleValue": true
-              }
-            },
-            {
-              "id": "media-url-present",
-              "leftValue": "={{ $json.mediaUrl }}",
-              "rightValue": "",
-              "operator": {
-                "type": "string",
-                "operation": "notEmpty",
+                "operation": "true",
                 "singleValue": true
               }
             }
