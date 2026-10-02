@@ -7,7 +7,9 @@ import {
   ArrowLeft,
   ArrowRight,
   Bell,
+  CalendarDays,
   Check,
+  CheckCircle2,
   ChevronDown,
   CircleAlert,
   Copy,
@@ -18,10 +20,13 @@ import {
   History,
   Inbox,
   Link2,
+  LoaderCircle,
   Menu,
   MessageSquareText,
   MoreHorizontal,
+  PencilLine,
   Plus,
+  RotateCcw,
   Search,
   Send,
   Settings,
@@ -263,9 +268,25 @@ function App({ section = 'overview', identity }: { section?: DashboardSection; i
   const [searchError, setSearchError] = useState('')
   const [notificationOpen, setNotificationOpen] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
+  const [pendingReviewCount, setPendingReviewCount] = useState(0)
   const headerActionsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => setCollapsed(window.localStorage.getItem('netfintax-sidebar-collapsed') === 'true'), [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    async function loadPendingReviewCount() {
+      try {
+        const response = await fetch('/api/content', { signal: controller.signal, cache: 'no-store' })
+        const payload = await response.json() as { data?: Array<{ status: string }> }
+        if (response.ok) setPendingReviewCount((payload.data ?? []).filter((item) => item.status === 'pending_review').length)
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError') setPendingReviewCount(0)
+      }
+    }
+    loadPendingReviewCount()
+    return () => controller.abort()
+  }, [])
 
   useEffect(() => {
     function closePopovers(event: MouseEvent) {
@@ -356,7 +377,7 @@ function App({ section = 'overview', identity }: { section?: DashboardSection; i
         <nav>
           <p className="nav-label">Workspace</p>
           <Link href="/content" className={section === 'content' ? 'active' : ''} onClick={() => setMobileNav(false)} data-tooltip="Content"><FileText size={18} /><span className="nav-copy">Content</span></Link>
-          <Link href="/queue" className={section === 'queue' ? 'active' : ''} onClick={() => setMobileNav(false)} data-tooltip="Review queue"><Inbox size={18} /><span className="nav-copy">Review queue</span><span className="nav-count">{items.filter(i => i.status === 'pending').length}</span></Link>
+          <Link href="/queue" className={section === 'queue' ? 'active' : ''} onClick={() => setMobileNav(false)} data-tooltip="Review queue"><Inbox size={18} /><span className="nav-copy">Review queue</span>{pendingReviewCount > 0 && <span className="nav-count" aria-label={`${pendingReviewCount} items pending review`}>{pendingReviewCount}</span>}</Link>
           <Link href="/history" className={section === 'history' ? 'active' : ''} onClick={() => setMobileNav(false)} data-tooltip="Activity history"><History size={18} /><span className="nav-copy">History</span></Link>
         </nav>
         <div className="sidebar-foot">
@@ -628,12 +649,12 @@ function ContentIntakePanel() {
     <form className="content-intake-card" onSubmit={submit} noValidate>
       {error && <div className="content-form-message error"><CircleAlert />{error}</div>}
       {success && <div className="content-form-message success"><Check />{success}</div>}
-      <label><span className="content-field-heading">Title <em>*</em></span><input className={fieldErrors.title ? 'has-error' : ''} value={title} onChange={(event) => { setTitle(event.target.value); if (fieldTouched.title) validateTitle(event.target.value) }} onBlur={(event) => { setFieldTouched((current) => ({ ...current, title: true })); validateTitle(event.target.value) }} aria-invalid={Boolean(fieldErrors.title)} aria-describedby="content-title-error" maxLength={240} placeholder="Enter a clear working title" />{fieldErrors.title && <span className="content-field-error" id="content-title-error">{fieldErrors.title}</span>}</label>
-      <label>Source URL <small>Use a public URL when available</small><div className={`content-url-input ${fieldErrors.source ? 'has-error' : ''}`}><Link2 /><input type="url" value={url} onChange={(event) => { setUrl(event.target.value); if (fieldTouched.source) validateSource(event.target.value, content) }} onBlur={(event) => { setFieldTouched((current) => ({ ...current, source: true })); validateSource(event.target.value, content) }} aria-invalid={Boolean(fieldErrors.source)} aria-describedby="content-source-error" placeholder="https://example.com/content" /></div></label>
+      <label htmlFor="content-title"><span className="content-field-heading"><span>Title <em>*</em></span></span><input id="content-title" className={fieldErrors.title ? 'has-error' : ''} value={title} onChange={(event) => { setTitle(event.target.value); if (fieldTouched.title) validateTitle(event.target.value) }} onBlur={(event) => { setFieldTouched((current) => ({ ...current, title: true })); validateTitle(event.target.value) }} aria-invalid={Boolean(fieldErrors.title)} aria-describedby="content-title-error" maxLength={240} placeholder="Enter a clear working title" />{fieldErrors.title && <span className="content-field-error" id="content-title-error">{fieldErrors.title}</span>}</label>
+      <label htmlFor="content-url"><span className="content-field-heading"><span>Source URL</span><small>Use a public URL when available</small></span><div className={`content-url-input ${fieldErrors.source ? 'has-error' : ''}`}><Link2 /><input id="content-url" type="url" value={url} onChange={(event) => { setUrl(event.target.value); if (fieldTouched.source) validateSource(event.target.value, content) }} onBlur={(event) => { setFieldTouched((current) => ({ ...current, source: true })); validateSource(event.target.value, content) }} aria-invalid={Boolean(fieldErrors.source)} aria-describedby="content-source-error" placeholder="https://example.com/content" /></div></label>
       <div className="content-form-divider"><span>or paste the source</span></div>
-      <label>Source content <small>Up to 100,000 characters</small><textarea className={fieldErrors.source ? 'has-error' : ''} value={content} onChange={(event) => { setContent(event.target.value); if (fieldTouched.source) validateSource(url, event.target.value) }} onBlur={(event) => { setFieldTouched((current) => ({ ...current, source: true })); validateSource(url, event.target.value) }} aria-invalid={Boolean(fieldErrors.source)} aria-describedby="content-source-error" maxLength={100000} placeholder="Paste the original article, transcript, or post here..." />{fieldErrors.source && <span className="content-field-error" id="content-source-error">{fieldErrors.source}</span>}</label>
-      <label>Instructions for AI <small>Optional</small><textarea className="content-notes" value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="Audience, tone, output requirements, or context..." /></label>
-      <footer><p><ShieldCheck />Human review is required before publication.</p><button className="primary-btn" disabled={submitting}>{submitting ? 'Submitting...' : 'Submit content'}</button></footer>
+      <label htmlFor="source-content"><span className="content-field-heading"><span>Source content</span><small>Up to 100,000 characters</small></span><textarea id="source-content" className={fieldErrors.source ? 'has-error' : ''} value={content} onChange={(event) => { setContent(event.target.value); if (fieldTouched.source) validateSource(url, event.target.value) }} onBlur={(event) => { setFieldTouched((current) => ({ ...current, source: true })); validateSource(url, event.target.value) }} aria-invalid={Boolean(fieldErrors.source)} aria-describedby="content-source-error" maxLength={100000} placeholder="Paste the original article, transcript, or post here..." />{fieldErrors.source && <span className="content-field-error" id="content-source-error">{fieldErrors.source}</span>}</label>
+      <label htmlFor="content-notes"><span className="content-field-heading"><span>Instructions for AI</span><small>Optional</small></span><textarea id="content-notes" className="content-notes" value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="Audience, tone, output requirements, or context..." /></label>
+      <footer><p><ShieldCheck />Human review is required before publication.</p><button className="primary-btn" disabled={submitting}>{submitting && <LoaderCircle className="submit-spinner" />}{submitting ? 'Submitting...' : 'Submit content'}</button></footer>
     </form>
     <aside className="content-guide-card">
       <header><div><h2>How it works</h2><p>Turn a source into a review-ready draft.</p></div></header>
@@ -642,7 +663,7 @@ function ContentIntakePanel() {
         <li><span>2</span><div><strong>Guide the AI</strong><p>Add an audience, tone, format, or key points under Instructions for AI.</p></div></li>
         <li><span>3</span><div><strong>Review the draft</strong><p>n8n generates the draft and sends it to Review queue for approval.</p></div></li>
       </ol>
-      <section className="content-guide-tip"><div><strong>Before you submit</strong><p>Remove sensitive client data and verify all tax, legal, deadline, and rate information.</p></div></section>
+      <section className="content-guide-tip"><CircleAlert /><div><strong>Before you submit</strong><p>Remove sensitive client data and verify all tax, legal, deadline, and rate information.</p></div></section>
       <footer><FileText /><span>You can follow the result in <Link href="/queue">Review queue</Link>.</span></footer>
     </aside>
     </div>
@@ -663,6 +684,7 @@ function ReviewQueuePanel() {
   const [selectedId, setSelectedId] = useState('')
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
+  const [queuePage, setQueuePage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -689,6 +711,7 @@ function ReviewQueuePanel() {
   const [compareFrom, setCompareFrom] = useState<number | null>(null)
   const [compareTo, setCompareTo] = useState<number | null>(null)
   const [assetsOpen, setAssetsOpen] = useState(false)
+  const [verificationOpen, setVerificationOpen] = useState(false)
   const [assets, setAssets] = useState<ContentAsset[]>([])
   const [assetsLoading, setAssetsLoading] = useState(false)
 
@@ -850,20 +873,33 @@ function ReviewQueuePanel() {
     return () => controller.abort()
   }, [])
 
-  if (loading) return <DashboardPageSkeleton />
-
   const filteredItems = items.filter((item) => {
     const matchesQuery = item.title.toLowerCase().includes(query.toLowerCase())
     const matchesStatus = status === 'all' || item.status === status
     return matchesQuery && matchesStatus
   })
-  const active = items.find((item) => item.id === selectedId) ?? filteredItems[0]
+  const queuePageSize = 5
+  const queuePageCount = Math.max(1, Math.ceil(filteredItems.length / queuePageSize))
+  const currentQueuePage = Math.min(queuePage, queuePageCount)
+  const paginatedItems = filteredItems.slice((currentQueuePage - 1) * queuePageSize, currentQueuePage * queuePageSize)
+  const active = paginatedItems.find((item) => item.id === selectedId) ?? paginatedItems[0]
   const flags = Array.isArray(active?.risk_flags) ? active.risk_flags.filter((flag): flag is string => typeof flag === 'string') : []
   const versions = active?.versions || []
   const viewedVersion = versions.find((entry) => entry.version_number === selectedVersion) ?? active?.latest_version
   const displayedOutput = outputView === 'caseStudy' ? editorDraft : draftOutput(viewedVersion?.generated_payload, outputView, editorDraft)
   const fromVersion = versions.find((entry) => entry.version_number === compareFrom)
   const toVersion = versions.find((entry) => entry.version_number === compareTo)
+  const outputLabels: Record<DraftOutputView, string> = { caseStudy: 'Case study', accuracyReview: 'Accuracy review', facebook: 'Facebook', linkedin: 'LinkedIn', threads: 'Threads / X', instagram: 'Instagram', email: 'Email', complianceNotes: 'Compliance' }
+
+  if (loading) return <DashboardPageSkeleton />
+
+  function selectQueuePage(nextPage: number) {
+    const page = Math.max(1, Math.min(nextPage, queuePageCount))
+    const firstItem = filteredItems[(page - 1) * queuePageSize]
+    setQueuePage(page)
+    setSelectedId(firstItem?.id || '')
+    setActionMessage('')
+  }
 
   function openVersionCompare() {
     if (versions.length < 2) return
@@ -895,9 +931,10 @@ function ReviewQueuePanel() {
     </header>
     {error ? <div className="queue-state-card error"><CircleAlert /><strong>Unable to load queue</strong><p>{error}</p></div> : items.length === 0 ? <div className="queue-state-card"><Inbox /><strong>No content to review</strong><p>New drafts will appear here after the automation workflow finishes.</p></div> : <div className="live-queue-workspace">
       <aside className="live-queue-list">
+        <header className="queue-panel-heading"><h2>Queue</h2><span>{filteredItems.length} {filteredItems.length === 1 ? 'item' : 'items'}</span></header>
         <div className="live-queue-tools">
-          <label><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search content..." /></label>
-          <select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="Filter by status">
+          <label><Search /><input value={query} onChange={(event) => { const value = event.target.value; const first = items.find((item) => item.title.toLowerCase().includes(value.toLowerCase()) && (status === 'all' || item.status === status)); setQuery(value); setQueuePage(1); setSelectedId(first?.id || '') }} placeholder="Search content..." /></label>
+          <select value={status} onChange={(event) => { const value = event.target.value; const first = items.find((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (value === 'all' || item.status === value)); setStatus(value); setQueuePage(1); setSelectedId(first?.id || '') }} aria-label="Filter by status">
             <option value="all">All statuses</option>
             <option value="pending_review">Pending review</option>
             <option value="processing">Processing</option>
@@ -909,17 +946,22 @@ function ReviewQueuePanel() {
           </select>
         </div>
         <div className="live-queue-items">
-          {filteredItems.length === 0 ? <div className="queue-list-empty">No matching content</div> : filteredItems.map((item) => <button className={item.id === active?.id ? 'active' : ''} key={item.id} onClick={() => setSelectedId(item.id)}>
-            <div><span className={`queue-status status-${item.status}`}>{statusLabel(item.status)}</span><time>{new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</time></div>
+          {filteredItems.length === 0 ? <div className="queue-list-empty">No matching content</div> : paginatedItems.map((item) => <button className={item.id === active?.id ? 'active' : ''} key={item.id} onClick={() => setSelectedId(item.id)}>
+            <div><span className={`queue-status status-${item.status}`}>{statusLabel(item.status)}</span><time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</time></div>
             <strong>{item.title}</strong>
             <p><Link2 />{item.platform}{item.source_url ? ` · ${new URL(item.source_url).hostname}` : ' · Pasted content'}</p>
             <footer><span className={`queue-risk risk-${item.risk_level}`}>{item.risk_level} risk</span>{item.latest_version && <small>Version {item.latest_version.version_number}</small>}</footer>
           </button>)}
         </div>
+        {filteredItems.length > 0 && <footer className="queue-pagination" aria-label="Queue pagination">
+          <button type="button" disabled={currentQueuePage === 1} onClick={() => selectQueuePage(currentQueuePage - 1)} aria-label="Previous page"><ArrowLeft /></button>
+          <span>Page <strong>{currentQueuePage}</strong> of {queuePageCount}</span>
+          <button type="button" disabled={currentQueuePage === queuePageCount} onClick={() => selectQueuePage(currentQueuePage + 1)} aria-label="Next page"><ArrowRight /></button>
+        </footer>}
       </aside>
       {active && <article className="live-review-detail">
-        <header>
-          <div><span className={`queue-status status-${active.status}`}>{statusLabel(active.status)}</span><h2>{active.title}</h2><p><Link2 />{active.source_url || 'Source content submitted directly'}</p></div>
+        <header className="review-detail-heading">
+          <h2>Review details</h2>
           <div className="review-more-wrap">
             <button className="icon-btn" aria-label="More options" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><MoreHorizontal /></button>
             {menuOpen && <div className="review-more-menu">
@@ -931,14 +973,25 @@ function ReviewQueuePanel() {
             </div>}
           </div>
         </header>
+        <section className="review-summary">
+          <div className="review-summary-badges"><span className={`queue-status status-${active.status}`}>{statusLabel(active.status)}</span><span className={`queue-risk risk-${active.risk_level}`}>{active.risk_level} risk</span>{active.latest_version && <span className="review-version-badge">Version {active.latest_version.version_number}</span>}</div>
+          <h3>{active.title}</h3>
+          <p><Link2 />{active.source_url ? <a href={active.source_url} target="_blank" rel="noreferrer">{active.source_url}</a> : 'Source content submitted directly'}</p>
+        </section>
         {actionMessage && <div className="review-action-message"><Check />{actionMessage}</div>}
         {active.status === 'scheduled' && active.scheduled_at && <div className="review-schedule-banner"><Clock3 /><div><strong>Publication scheduled</strong><p>{new Date(active.scheduled_at).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' })} · {Array.isArray(active.target_account_ids) ? active.target_account_ids.length : 0} account(s)</p></div></div>}
-        {flags.length > 0 && <div className="live-risk-banner"><CircleAlert /><div><strong>{flags.length} items require verification</strong><p>{flags[0]}</p></div></div>}
-        <div className="live-review-columns">
-          <section><header><strong>ORIGINAL CONTENT</strong><span>{active.raw_content?.length ?? 0} characters</span></header><div className="review-copy">{active.raw_content || 'The original content will be extracted from the source URL.'}</div></section>
-          <section className="draft-editor-card"><header><strong><Sparkles />NETFINTAX OUTPUT</strong><div className="draft-output-selectors"><select aria-label="Select AI output" value={outputView} onChange={(event) => setOutputView(event.target.value as DraftOutputView)}><option value="caseStudy">Case study</option><option value="accuracyReview">Accuracy review</option><option value="facebook">Facebook</option><option value="linkedin">LinkedIn</option><option value="threads">Threads / X</option><option value="instagram">Instagram</option><option value="email">Email</option><option value="complianceNotes">Compliance</option></select>{versions.length > 0 ? <select aria-label="Select draft version" value={selectedVersion ?? ''} onChange={(event) => { const version = versions.find((entry) => entry.version_number === Number(event.target.value)); if (version) { setSelectedVersion(version.version_number); setEditorDraft(version.editor_content || '') } }}>{versions.map((version) => <option key={version.id} value={version.version_number}>Version {version.version_number}</option>)}</select> : <span>Not ready</span>}{versions.length > 1 && <button type="button" className="draft-compare-btn" onClick={openVersionCompare}><History />Compare</button>}</div></header><textarea className={!displayedOutput ? 'empty' : ''} value={displayedOutput} onChange={(event) => outputView === 'caseStudy' && setEditorDraft(event.target.value)} readOnly={outputView !== 'caseStudy'} disabled={!active.latest_version || (outputView === 'caseStudy' && ['published', 'scheduled'].includes(active.status))} placeholder={active.status === 'processing' || active.status === 'received' ? 'The AI output is still being generated.' : `No ${outputView} output is available in this version.`} /></section>
+        <div className="review-metadata">
+          <div><Link2 /><span><small>Source</small><strong>{active.platform || 'Direct input'}</strong></span></div>
+          <div><FileText /><span><small>Content type</small><strong>Social post</strong></span></div>
+          <div><Sparkles /><span><small>Output type</small><strong>{outputLabels[outputView]}</strong></span></div>
+          <div><Menu /><span><small>Characters</small><strong>{active.raw_content?.length ?? 0}</strong></span></div>
         </div>
-        <div className="draft-change-note"><input value={changeNote} onChange={(event) => setChangeNote(event.target.value)} maxLength={1000} disabled={!active.latest_version || ['published', 'scheduled'].includes(active.status)} placeholder="Describe your edit (optional)..." /></div>
+        {flags.length > 0 && <div className="live-risk-banner"><CircleAlert /><div><strong>{flags.length} items require verification</strong><p>Review the flagged claims before approving this content.</p></div><button type="button" onClick={() => setVerificationOpen(true)}>See details</button></div>}
+        <div className="live-review-columns">
+          <section><header><strong>Original content</strong><span>{active.raw_content?.length ?? 0} characters</span></header><div className="review-copy">{active.raw_content || 'The original content will be extracted from the source URL.'}</div></section>
+          <section className="draft-editor-card"><header><strong>NetFintax output</strong><div className="draft-output-selectors"><select aria-label="Select AI output" value={outputView} onChange={(event) => setOutputView(event.target.value as DraftOutputView)}><option value="caseStudy">Case study</option><option value="accuracyReview">Accuracy review</option><option value="facebook">Facebook</option><option value="linkedin">LinkedIn</option><option value="threads">Threads / X</option><option value="instagram">Instagram</option><option value="email">Email</option><option value="complianceNotes">Compliance</option></select>{versions.length > 0 ? <select aria-label="Select draft version" value={selectedVersion ?? ''} onChange={(event) => { const version = versions.find((entry) => entry.version_number === Number(event.target.value)); if (version) { setSelectedVersion(version.version_number); setEditorDraft(version.editor_content || '') } }}>{versions.map((version) => <option key={version.id} value={version.version_number}>Version {version.version_number}</option>)}</select> : <span>Not ready</span>}{versions.length > 1 && <button type="button" className="draft-compare-btn" onClick={openVersionCompare}><History />Compare</button>}</div></header><textarea className={!displayedOutput ? 'empty' : ''} value={displayedOutput} onChange={(event) => outputView === 'caseStudy' && setEditorDraft(event.target.value)} readOnly={outputView !== 'caseStudy'} disabled={!active.latest_version || (outputView === 'caseStudy' && ['published', 'scheduled'].includes(active.status))} placeholder={active.status === 'processing' || active.status === 'received' ? 'The AI output is still being generated.' : `No ${outputView} output is available in this version.`} /></section>
+        </div>
+        <label className="draft-change-note"><PencilLine /><input value={changeNote} onChange={(event) => setChangeNote(event.target.value)} maxLength={1000} disabled={!active.latest_version || ['published', 'scheduled'].includes(active.status)} placeholder="Describe your edit (optional)..." /></label>
         <footer className="live-review-actions"><button className="request-revision-btn" disabled={!active.latest_version || actionPending || active.status === 'published'} onClick={() => { setRevisionOpen(true); setActionMessage('') }}><MessageSquareText />Request revision</button><button className="secondary-btn save-draft-btn" disabled={!active.latest_version || actionPending || !editorDraft.trim() || editorDraft.trim() === (active.latest_version.editor_content || '').trim() || ['published', 'scheduled'].includes(active.status)} onClick={saveDraft}><FileText />{actionPending ? 'Saving...' : 'Save draft'}</button><button className="approve-review-btn" disabled={!active.latest_version || actionPending || ['approved', 'scheduled', 'published'].includes(active.status)} onClick={openPublishOptions}><Check />{active.status === 'published' ? 'Published' : active.status === 'scheduled' ? 'Scheduled' : active.status === 'approved' ? 'Approved' : 'Approve content'}</button></footer>
       </article>}
     </div>}
@@ -967,6 +1020,16 @@ function ReviewQueuePanel() {
         <button type="button" className="icon-btn modal-close" onClick={() => setAssetsOpen(false)}><X /></button><div className="modal-icon"><Download /></div><h2 id="assets-title">Generated files</h2><p className="modal-copy">Download versioned assets stored securely in Supabase.</p>
         {assetsLoading ? <div className="assets-empty">Loading files...</div> : assets.length === 0 ? <div className="assets-empty">No generated files are available for this content yet.</div> : <div className="assets-list">{assets.map((asset) => <a key={asset.id} href={asset.url || '#'} target="_blank" rel="noreferrer" className={!asset.url ? 'disabled' : ''}><span><FileText /><span><strong>{asset.asset_type.replaceAll('_', ' ')}</strong><small>{asset.storage_path.split('/').at(-2)} · {new Date(asset.created_at).toLocaleDateString('en-US')}</small></span></span><Download /></a>)}</div>}
         <div className="modal-actions"><button type="button" className="primary-btn" onClick={() => setAssetsOpen(false)}>Done</button></div>
+      </section>
+    </div>}
+    {verificationOpen && <div className="modal-wrap">
+      <section className="modal verification-modal" role="dialog" aria-modal="true" aria-labelledby="verification-title">
+        <button type="button" className="icon-btn modal-close" onClick={() => setVerificationOpen(false)}><X /></button>
+
+        <h2 id="verification-title">Verification required</h2>
+        <p className="modal-copy">Review these {flags.length} flagged {flags.length === 1 ? 'item' : 'items'} before approving this content.</p>
+        <ol className="verification-list">{flags.map((flag, index) => <li key={`${index}-${flag}`}><span>{index + 1}</span><p>{flag}</p></li>)}</ol>
+        <div className="modal-actions"><button type="button" className="primary-btn" onClick={() => setVerificationOpen(false)}>Done</button></div>
       </section>
     </div>}
     {revisionOpen && <div className="modal-wrap">
@@ -1004,9 +1067,14 @@ function HistoryPanel() {
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     let active = true
+    setLoading(true)
+    setError('')
     fetch('/api/history', { cache: 'no-store' })
       .then(async (response) => {
         const payload = await response.json()
@@ -1016,29 +1084,56 @@ function HistoryPanel() {
       .catch((reason) => active && setError(reason instanceof Error ? reason.message : 'Could not load activity history.'))
       .finally(() => active && setLoading(false))
     return () => { active = false }
-  }, [])
+  }, [reloadKey])
 
   const filteredEvents = useMemo(() => events.filter((event) => {
     const matchesQuery = !query.trim() || `${event.title} ${event.action} ${event.detail}`.toLowerCase().includes(query.trim().toLowerCase())
-    return matchesQuery && (filter === 'all' || event.status === filter)
-  }), [events, filter, query])
+    const createdAt = new Date(event.createdAt).getTime()
+    const from = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : Number.NEGATIVE_INFINITY
+    const to = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : Number.POSITIVE_INFINITY
+    return matchesQuery && (filter === 'all' || event.status === filter) && createdAt >= from && createdAt <= to
+  }), [dateFrom, dateTo, events, filter, query])
   const publishedCount = events.filter((event) => event.status === 'published').length
   const approvedCount = events.filter((event) => event.status === 'approved').length
   const attentionCount = events.filter((event) => ['failed', 'rejected', 'revision_requested'].includes(event.status)).length
 
-  if (loading) return <DashboardPageSkeleton />
-  if (error) return <section className="history-page"><div className="queue-state-card error"><CircleAlert /><strong>Could not load history</strong><p>{error}</p></div></section>
+  const hasFilters = Boolean(query || filter !== 'all' || dateFrom || dateTo)
+  const clearFilters = () => { setQuery(''); setFilter('all'); setDateFrom(''); setDateTo('') }
+  const formatEventDate = (value: string) => {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+  }
+  const relativeEventDate = (value: string) => {
+    const timestamp = new Date(value).getTime()
+    if (Number.isNaN(timestamp)) return ''
+    const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000))
+    if (seconds < 60) return 'Just now'
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+    const days = Math.floor(hours / 24)
+    return `${days} day${days === 1 ? '' : 's'} ago`
+  }
+  const iconForEvent = (event: HistoryEvent) => event.status === 'published' ? Send : event.status === 'approved' ? CheckCircle2 : event.status === 'revision_requested' ? MessageSquareText : ['failed', 'rejected'].includes(event.status) ? CircleAlert : event.status === 'pending_review' ? FileText : Inbox
+
+  if (loading) return <section className="history-page history-loading" aria-busy="true">
+    <div className="history-skeleton history-skeleton-heading" />
+    <div className="history-stats">{Array.from({ length: 4 }, (_, index) => <div className="history-skeleton history-skeleton-stat" key={index} />)}</div>
+    <div className="history-card history-skeleton-table">{Array.from({ length: 7 }, (_, index) => <div className="history-skeleton" key={index} />)}</div>
+  </section>
+  if (error) return <section className="history-page"><div className="history-state error"><CircleAlert /><strong>Could not load history</strong><p>{error}</p><button type="button" className="secondary-btn" onClick={() => setReloadKey((value) => value + 1)}><RotateCcw />Retry</button></div></section>
 
   return <section className="history-page">
     <header className="history-heading">
-      <div><span>ACTIVITY LOG</span><h1>Activity history</h1><p>Track every submission, draft, review decision, and publication.</p></div>
+      <div><h1>Activity history</h1><p>Track every submission, draft, review decision, and publication.</p></div>
       <Link className="primary-btn" href="/content"><Plus />Submit content</Link>
     </header>
     <div className="history-stats">
-      <article><span>Total activity</span><strong>{events.length}</strong><small>Latest 250 events</small></article>
-      <article><span>Approved</span><strong>{approvedCount}</strong><small>Review decisions</small></article>
-      <article><span>Published</span><strong>{publishedCount}</strong><small>Sent to GoHighLevel</small></article>
-      <article><span>Needs attention</span><strong>{attentionCount}</strong><small>Revision, rejected, or failed</small></article>
+      <article className="history-stat-total"><span className="history-stat-icon"><FileText /></span><div><span>Total activity</span><strong>{events.length}</strong><small>Latest 250 events</small></div></article>
+      <article className="history-stat-approved"><span className="history-stat-icon"><CheckCircle2 /></span><div><span>Approved</span><strong>{approvedCount}</strong><small>Review decisions</small></div></article>
+      <article className="history-stat-published"><span className="history-stat-icon"><Send /></span><div><span>Published</span><strong>{publishedCount}</strong><small>Sent to GoHighLevel</small></div></article>
+      <article className="history-stat-attention"><span className="history-stat-icon"><CircleAlert /></span><div><span>Needs attention</span><strong>{attentionCount}</strong><small>Revision, rejected, or failed</small></div></article>
     </div>
     <div className="history-card">
       <div className="history-toolbar">
@@ -1046,17 +1141,29 @@ function HistoryPanel() {
         <select value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filter activity">
           <option value="all">All activity</option><option value="received">Submitted</option><option value="pending_review">Draft created</option><option value="revision_requested">Needs revision</option><option value="approved">Approved</option><option value="published">Published</option><option value="failed">Failed</option>
         </select>
+        <div className="history-date-filter"><CalendarDays /><input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} aria-label="Activity from date" /><span>&ndash;</span><input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} aria-label="Activity to date" /></div>
+        <button type="button" className="history-clear-btn" disabled={!hasFilters} onClick={clearFilters}><RotateCcw />Clear filters</button>
       </div>
-      {filteredEvents.length === 0 ? <div className="history-empty"><History /><strong>No activity found</strong><p>{events.length ? 'Try another search or filter.' : 'New submissions and review actions will appear here.'}</p></div> :
-        <div className="history-list">{filteredEvents.map((event) => {
-          const EventIcon = event.status === 'published' ? Send : event.status === 'approved' ? Check : event.status === 'revision_requested' ? MessageSquareText : ['failed', 'rejected'].includes(event.status) ? CircleAlert : event.status === 'pending_review' ? FileText : Inbox
-          const date = new Date(event.createdAt)
-          return <article key={event.id}>
-            <span className={`history-event-icon status-${event.status}`}><EventIcon /></span>
-            <div className="history-event-copy"><div><strong>{event.action}</strong><span className={`queue-status status-${event.status}`}>{statusLabel(event.status)}</span></div><h2>{event.title}</h2><p>{event.detail}</p></div>
-            <div className="history-event-meta"><time dateTime={event.createdAt}>{Number.isNaN(date.getTime()) ? event.createdAt : date.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}</time><Link href="/queue">View content <ArrowRight /></Link></div>
-          </article>
-        })}</div>}
+      {filteredEvents.length === 0 ? <div className="history-empty"><History /><strong>No activity found</strong><p>{events.length ? 'Try another search or filter.' : 'New submissions and review actions will appear here.'}</p>{hasFilters && <button type="button" className="secondary-btn" onClick={clearFilters}>Clear filters</button>}</div> : <>
+        <div className="history-table-wrap"><table className="history-table">
+          <thead><tr><th>Type</th><th>Title</th><th>Status</th><th className="history-details-column">Details</th><th>Date &amp; time</th><th>Actions</th></tr></thead>
+          <tbody>{filteredEvents.map((event) => {
+            const EventIcon = iconForEvent(event)
+            return <tr key={event.id}>
+              <td><span className={`history-event-icon status-${event.status}`}><EventIcon /></span></td>
+              <td><strong>{event.action}</strong><span>{event.title}</span></td>
+              <td><span className={`queue-status status-${event.status}`}>{statusLabel(event.status)}</span></td>
+              <td className="history-details-column">{event.detail}</td>
+              <td><time dateTime={event.createdAt}>{formatEventDate(event.createdAt)}</time><small>{relativeEventDate(event.createdAt)}</small></td>
+              <td><Link className="history-view-btn" href="/queue">View content <ExternalLink /></Link></td>
+            </tr>
+          })}</tbody>
+        </table></div>
+        <div className="history-mobile-list">{filteredEvents.map((event) => {
+          const EventIcon = iconForEvent(event)
+          return <article key={event.id}><div className="history-mobile-title"><span className={`history-event-icon status-${event.status}`}><EventIcon /></span><div><strong>{event.action}</strong><span>{event.title}</span></div></div><div className="history-mobile-meta"><span className={`queue-status status-${event.status}`}>{statusLabel(event.status)}</span><time dateTime={event.createdAt}>{formatEventDate(event.createdAt)}</time></div><p>{event.detail}</p><Link className="history-view-btn" href="/queue">View content <ExternalLink /></Link></article>
+        })}</div>
+      </>}
     </div>
   </section>
 }
